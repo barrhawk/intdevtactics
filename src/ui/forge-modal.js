@@ -13,6 +13,7 @@ export class ForgeModal {
    * @param {(orbs: number) => any} [callbacks.onCraftItem]
    * @param {(itemIndex: number, orbsRefunded?: number) => void} [callbacks.onSalvageItem]
    * @param {(itemIndex: number, unitId: string) => void} [callbacks.onEquipItem]
+   * @param {(itemIndex: number) => void} [callbacks.onBoostItem]
    * @param {() => void} [callbacks.onClose]
    */
   constructor(containerEl = document.body, callbacks = {}) {
@@ -522,6 +523,11 @@ export class ForgeModal {
     this.state.inventory.forEach((item, index) => {
       const grade = (item.grade || 'B').toUpperCase();
       const salvageYield = Math.max(1, Math.round((item.orbValue || 25) * 0.1));
+      const stars = item.stars || 0;
+      const starsLabel = stars > 0 ? `★ +${stars}` : '★ Base';
+      const prefixes = ['BOREAL', 'ASTRAL', 'CHAOTIC', 'CELESTIAL', 'FIERY'];
+      const prefix = (item.elementalPrefix || item.prefix || prefixes[index % prefixes.length]).toUpperCase();
+      const finishTier = item.finishTier || (stars >= 5 ? 'Adamantite' : stars >= 4 ? 'Gold' : stars >= 3 ? 'Mythril' : stars >= 2 ? 'Iron' : 'Mythril');
 
       const card = document.createElement('div');
       card.className = 'inventory-item-card';
@@ -532,8 +538,14 @@ export class ForgeModal {
             <span>${item.type === 'armor' ? '🛡️' : '⚔️'}</span>
             <span>${item.name}</span>
             <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
+            <span class="item-stars-badge">${starsLabel}</span>
           </div>
           <span style="color: var(--text-gold); font-size: 11px; font-weight: 700;">✦ ${item.orbValue}</span>
+        </div>
+
+        <div class="item-card-meta-row">
+          <span class="elemental-prefix-badge prefix-${prefix.toLowerCase()}">[${prefix}]</span>
+          <span class="finish-tier-badge finish-${finishTier.toLowerCase()}">${finishTier} Finish</span>
         </div>
 
         <div class="item-card-stats">
@@ -552,11 +564,23 @@ export class ForgeModal {
               )
               .join('')}
           </select>
+          <button class="btn-boost-item" data-item-idx="${index}" ${stars >= 5 ? 'disabled' : ''}>
+            ${stars >= 5 ? '★ MAX (5★)' : '✦ BOOST (75 ORBS)'}
+          </button>
           <button class="btn-salvage" data-item-idx="${index}">
             ✦ Salvage (+${salvageYield})
           </button>
         </div>
       `;
+
+      // Boost listener
+      const btnBoost = card.querySelector('.btn-boost-item');
+      if (btnBoost && stars < 5) {
+        btnBoost.addEventListener('click', () => {
+          this.callbacks.onBoostItem?.(index);
+          this._renderActiveTab();
+        });
+      }
 
       // Equip change listener
       const select = card.querySelector('.equip-select');
@@ -644,6 +668,32 @@ export class ForgeModal {
       const grade = (unit.grade || 'B').toUpperCase();
       const stats = unit.stats || {};
       const seedUrl = `https://set.world/roll/character?seed=${unit.seed || unit.id}`;
+      const eq = unit.equipment || {};
+
+      const formatSlot = (slotKey, itemVal, defaultIcon, defaultName) => {
+        let name = defaultName;
+        let slotGrade = grade;
+        let meta = '';
+
+        if (typeof itemVal === 'string') {
+          name = itemVal;
+        } else if (itemVal && typeof itemVal === 'object') {
+          name = itemVal.name || defaultName;
+          slotGrade = (itemVal.tierGrade || itemVal.tier || itemVal.grade || slotGrade).toUpperCase();
+          meta = itemVal.statsBonus || (itemVal.score ? `Score ${Math.round(itemVal.score)}` : '') || itemVal.material || '';
+        }
+
+        return `
+          <div class="paperdoll-slot">
+            <div class="paperdoll-slot-header">
+              <span class="slot-label">${defaultIcon} ${slotKey.toUpperCase()}</span>
+              <span class="grade-badge grade-${slotGrade.toLowerCase()}">${slotGrade}</span>
+            </div>
+            <div class="paperdoll-slot-name">${name}</div>
+            ${meta ? `<div class="paperdoll-slot-meta">${meta}</div>` : ''}
+          </div>
+        `;
+      };
 
       const card = document.createElement('div');
       card.className = 'roster-unit-card';
@@ -669,9 +719,19 @@ export class ForgeModal {
           <div class="roster-stat-cell"><span class="stat-lbl">DEF</span><span class="stat-num">${stats.DEF || 25}</span></div>
         </div>
 
-        <div class="roster-gear-list">
-          <div>⚔️ Tool: <strong>${unit.equippedTool || 'Standard Weapon'}</strong></div>
-          <div>🛡️ Armor: <strong>${unit.equippedArmor || 'Standard Tunic'}</strong></div>
+        <div class="roster-paperdoll-section">
+          <div class="paperdoll-section-title">
+            <span>✦ 6-SLOT SET.WORLD EQUIPMENT PAPERDOLL</span>
+            <span class="paperdoll-sub">PROVENANCE INSPECTOR</span>
+          </div>
+          <div class="paperdoll-grid">
+            ${formatSlot('tool', eq.tool || unit.equippedTool, '⚔️', unit.equippedTool || `${unit.job} Weapon`)}
+            ${formatSlot('offhand', eq.offhand || eq.shield, '🛡️', `${unit.job === 'Knight' ? 'Kite Shield' : unit.job === 'Paladin' ? 'Aegis Shield' : 'Focus Orb'}`)}
+            ${formatSlot('head', eq.head, '🪖', `${unit.job} Helm`)}
+            ${formatSlot('chest', eq.chest || unit.equippedArmor, '🥋', unit.equippedArmor || 'Azure Clan Mail')}
+            ${formatSlot('legs', eq.legs, '👖', `${unit.job} Greaves`)}
+            ${formatSlot('finger', eq.finger || eq.ring, '💍', 'Band of Set Heritage')}
+          </div>
         </div>
 
         <div class="roster-traits-row">
