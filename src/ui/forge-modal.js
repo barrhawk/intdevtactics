@@ -523,7 +523,7 @@ export class ForgeModal {
     this.state.inventory.forEach((item, index) => {
       const grade = (item.grade || 'B').toUpperCase();
       const salvageYield = Math.max(1, Math.round((item.orbValue || 25) * 0.1));
-      const stars = item.stars || 0;
+      const stars = item.boostStars || item.stars || 0;
       const starsLabel = stars > 0 ? `★ +${stars}` : '★ Base';
       const prefixes = ['BOREAL', 'ASTRAL', 'CHAOTIC', 'CELESTIAL', 'FIERY'];
       const prefix = (item.elementalPrefix || item.prefix || prefixes[index % prefixes.length]).toUpperCase();
