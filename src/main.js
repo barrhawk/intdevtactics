@@ -50,6 +50,8 @@ class TacticsGame {
     this.battleOver = false;
     this.turnCount = 1;
     this._isProcessingTurn = false;
+    this.matchId = 0;
+    this._turnTimer = null;
     this.statsSummary = {
       turns: 0,
       damageDealt: 0,
@@ -81,7 +83,7 @@ class TacticsGame {
         material: 'Mythril Steel',
         statsBonus: '+12 STR, +4 VIT',
         rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Mythril Broadsword', slot: 'tool' },
-        equippedTo: 'unit_blue_0'
+        equippedTo: 'unit_azure_0'
       },
       {
         id: 'item-init-2',
@@ -94,7 +96,7 @@ class TacticsGame {
         material: 'Ironwood & Mythril',
         statsBonus: '+14 DEX, +6 AGI',
         rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Composite Longbow', slot: 'tool' },
-        equippedTo: 'unit_blue_1'
+        equippedTo: 'unit_azure_1'
       },
       {
         id: 'item-init-3',
@@ -107,7 +109,7 @@ class TacticsGame {
         material: 'Starlight Crystal',
         statsBonus: '+22 INT, +10 WIS',
         rawItem: { tier: 'A', tierGrade: 'A', orbValue: 625, name: 'Arcane Focus Rod', slot: 'tool' },
-        equippedTo: 'unit_blue_2'
+        equippedTo: 'unit_azure_2'
       },
       {
         id: 'item-init-4',
@@ -120,7 +122,7 @@ class TacticsGame {
         material: 'Obsidian Glass',
         statsBonus: '+6 DEX, +4 LUK',
         rawItem: { tier: 'C', tierGrade: 'C', orbValue: 25, name: 'Obsidian Dirk', slot: 'tool' },
-        equippedTo: 'unit_blue_3'
+        equippedTo: 'unit_azure_3'
       },
       {
         id: 'item-init-5',
@@ -248,26 +250,61 @@ class TacticsGame {
      ======================================================================== */
 
   async start() {
-    this.tacticalHud.addLog('TACTICS ENGINE INITIALIZING // Loading 3D Mythril Assets...', 'system');
+    try {
+      this._bootStage = 'starting';
+      this.tacticalHud.addLog('TACTICS ENGINE INITIALIZING // Loading 3D Mythril Assets...', 'system');
 
-    // 1. Load sprite atlas, sprite sheet, Set 3D item models and Mythril materials
-    await this.stageUnitManager.loadAssets(this.renderer);
+      // 1. Start render & animation loop immediately so the 3D diorama is visible right away
+      this._startRenderLoop();
 
-    // 2. Load seeded 4v4 clan roster and spawn units
-    await this.setupBattlefield(this.baseSeed);
+      // 2. Load sprite atlas, sprite sheet, Set 3D item models and Mythril materials
+      this._bootStage = 'loadingAssets';
+      await this.stageUnitManager.loadAssets(this.renderer);
 
-    // 3. Start render & animation loop
-    this._startRenderLoop();
+      // 3. Load seeded 4v4 clan roster and spawn units
+      this._bootStage = 'setupBattlefield';
+      await this.setupBattlefield(this.baseSeed);
 
-    // 4. Begin FFTA CT Turn Loop
-    this.advanceTurn();
+      // 4. Begin FFTA CT Turn Loop
+      this._bootStage = 'ready';
+      this.advanceTurn();
+    } catch (err) {
+      this._bootError = String(err?.stack || err);
+      console.error('START_BOOT_ERROR:', err);
+      this.tacticalHud.addLog(`BOOT ERROR: ${err?.message || err}`, 'system');
+    }
   }
 
   async setupBattlefield(seed) {
+    this.matchId++;
+    const currentMatchId = this.matchId;
+    if (this._turnTimer) {
+      clearTimeout(this._turnTimer);
+      this._turnTimer = null;
+    }
+
     this.battleOver = false;
     this._isProcessingTurn = false;
     this.turnCount = 1;
     this.baseSeed = (seed >>> 0);
+
+    // Reset TurnManager state with new seed
+    this.turnManager.reset(this.baseSeed);
+
+    // Reset interaction modes and active target selections
+    this.currentMode = 'standby';
+    this.activeUnit = null;
+    this.inspectedTarget = null;
+    this.activeForecast = null;
+    this.selectedAbility = null;
+    this.hoveredTile = null;
+    this.reachableTiles = [];
+    this.attackableTiles = [];
+
+    // Wipe HUD overlays, panels, and banners
+    if (this.tacticalHud?.resetBattlefieldHUD) {
+      this.tacticalHud.resetBattlefieldHUD();
+    }
 
     // Rebuild terrain for new seed
     this.isometricBoard.dispose();
@@ -275,6 +312,8 @@ class TacticsGame {
 
     // Generate seeded clan roster (4 Azure Clan vs 4 Crimson Order)
     const rosterData = await generateClanRoster(this.baseSeed, this.isometricBoard);
+    if (this.matchId !== currentMatchId) return;
+
     this.units = rosterData.units;
 
     // Ensure synchronized x/gridX and z/gridZ coordinates on all units
@@ -288,14 +327,30 @@ class TacticsGame {
       unit.standHeight = 18;
     }
 
+    // Re-apply equipped inventory items so Forge weapons persist across matches
+    for (const item of this.playerInventory) {
+      if (item.equippedTo && (item.type === 'weapon' || item.slot === 'tool')) {
+        const u = this.units.find((unit) => unit.id === item.equippedTo);
+        if (u) {
+          const newSpec = mapToolToWeaponSpec(item.rawItem || item, u.className);
+          u.weapon = newSpec;
+          u.weaponType = newSpec.weaponType;
+          u.heldModelName = newSpec.heldModelName;
+          u.abilities = newSpec.abilities;
+          u.attackRange = newSpec.attackRange;
+        }
+      }
+    }
+
     // Spawn 3D sprite actors and ground plinths
     this.stageUnitManager.spawnUnits(this.units, this.isometricBoard);
 
-    // Link sprite groups for screen projection
+    // Link sprite groups for screen projection and synchronize standHeight with actual actor stature
     for (const unit of this.units) {
       const actor = this.stageUnitManager.units.get(unit.id);
       if (actor && actor.sprite) {
         unit.group = actor.sprite.group;
+        unit.standHeight = actor.sprite.standHeight;
       }
     }
 
@@ -324,7 +379,7 @@ class TacticsGame {
   }
 
   _syncForgeRoster() {
-    const azureUnits = this.units.filter((u) => u.team === 'blue');
+    const azureUnits = this.units.filter((u) => u.team === 'blue' || u.team === 'azure');
     const rosterUnits = azureUnits.map((u) => ({
       id: u.id,
       name: u.name,
@@ -360,7 +415,8 @@ class TacticsGame {
      ======================================================================== */
 
   async advanceTurn() {
-    if (this.battleOver) return;
+    const currentMatchId = this.matchId;
+    if (this.battleOver || this.matchId !== currentMatchId) return;
     if (this._isProcessingTurn) return;
     this._isProcessingTurn = true;
 
@@ -422,6 +478,8 @@ class TacticsGame {
         'info'
       );
 
+      if (this.matchId !== currentMatchId) return;
+
       if (isAuto) {
         // AI Controlled Turn (Crimson Order or Auto-Battle Azure)
         await this._executeAITurn();
@@ -460,6 +518,7 @@ class TacticsGame {
 
   async executeMove(targetTile) {
     if (!this.activeUnit || this.currentMode !== 'move') return;
+    const currentMatchId = this.matchId;
 
     const matchedPathEntry = this.reachableTiles.find(
       (t) => t.x === targetTile.x && t.z === targetTile.z
@@ -478,6 +537,7 @@ class TacticsGame {
       matchedPathEntry.path,
       this.isometricBoard
     );
+    if (this.matchId !== currentMatchId) return;
 
     // Ensure synchronized coordinates
     this.activeUnit.gridX = matchedPathEntry.x;
@@ -593,6 +653,7 @@ class TacticsGame {
     ) {
       return;
     }
+    const currentMatchId = this.matchId;
 
     const attacker = this.activeUnit;
     const defender = this.inspectedTarget;
@@ -630,6 +691,7 @@ class TacticsGame {
       outcome,
       this.isometricBoard
     );
+    if (this.matchId !== currentMatchId) return;
 
     // Spawn floating damage/heal/crit/orbs popups
     const headAnchor = this.stageUnitManager.getUnitScreenAnchor(defender.id, this.isometricBoard);
@@ -733,6 +795,7 @@ class TacticsGame {
 
   confirmEndTurn(facing) {
     if (!this.activeUnit || this.currentMode === 'animating') return;
+    const currentMatchId = this.matchId;
 
     // Update facing
     const finalFacing = facing || this.activeUnit.facing || 'SE';
@@ -769,7 +832,9 @@ class TacticsGame {
     this.isometricBoard.setActiveUnitTile(null, null);
 
     // Schedule next turn asynchronously to unwind promise call stack
-    setTimeout(() => {
+    if (this._turnTimer) clearTimeout(this._turnTimer);
+    this._turnTimer = setTimeout(() => {
+      if (this.matchId !== currentMatchId) return;
       this.advanceTurn();
     }, 80);
   }
@@ -791,6 +856,7 @@ class TacticsGame {
      ======================================================================== */
 
   async _executeAITurn() {
+    const currentMatchId = this.matchId;
     const aiUnit = this.activeUnit;
     this.currentMode = 'animating';
     this.tacticalHud.setActiveUnit(aiUnit, 'animating');
@@ -811,6 +877,7 @@ class TacticsGame {
         decision.movePath,
         this.isometricBoard
       );
+      if (this.matchId !== currentMatchId) return;
 
       aiUnit.gridX = decision.moveTile.x;
       aiUnit.gridZ = decision.moveTile.z;
@@ -825,6 +892,7 @@ class TacticsGame {
 
     // Short readable tactical pause
     await this._sleep(350);
+    if (this.matchId !== currentMatchId) return;
 
     // 2. Animate Combat Strike if target was in range
     if (decision.ability && decision.targetUnit) {
@@ -863,6 +931,7 @@ class TacticsGame {
 
       this.tacticalHud.setInspectedTarget(target, null, forecast);
       await this._sleep(400);
+      if (this.matchId !== currentMatchId) return;
 
       // Check Judge Law compliance for AI combat
       this._checkJudgeLaw(aiUnit, target, forecast);
@@ -879,6 +948,7 @@ class TacticsGame {
         outcome,
         this.isometricBoard
       );
+      if (this.matchId !== currentMatchId) return;
 
       const headAnchor = this.stageUnitManager.getUnitScreenAnchor(
         target.id,
@@ -942,9 +1012,12 @@ class TacticsGame {
     }
 
     await this._sleep(250);
+    if (this.matchId !== currentMatchId) return;
     // Unwind call stack before proceeding to next turn
     this._isProcessingTurn = false;
-    setTimeout(() => {
+    if (this._turnTimer) clearTimeout(this._turnTimer);
+    this._turnTimer = setTimeout(() => {
+      if (this.matchId !== currentMatchId) return;
       this.advanceTurn();
     }, 80);
   }
@@ -955,11 +1028,11 @@ class TacticsGame {
 
   _checkBattleOutcome() {
     const azureAlive = this.units.filter(
-      (u) => u.team === 'blue' && u.alive !== false && (u.hp === undefined || u.hp > 0)
+      (u) => (u.team === 'blue' || u.team === 'azure') && u.alive !== false && (u.hp === undefined || u.hp > 0)
     ).length;
 
     const crimsonAlive = this.units.filter(
-      (u) => u.team === 'red' && u.alive !== false && (u.hp === undefined || u.hp > 0)
+      (u) => (u.team === 'red' || u.team === 'crimson') && u.alive !== false && (u.hp === undefined || u.hp > 0)
     ).length;
 
     if (crimsonAlive === 0) {
@@ -1088,6 +1161,18 @@ class TacticsGame {
     const item = this.playerInventory[index];
     if (!item) return;
 
+    // Clear previously equipped weapon on this unit if another item was equipped
+    if (unitId) {
+      for (let i = 0; i < this.playerInventory.length; i++) {
+        if (i !== index && this.playerInventory[i].equippedTo === unitId) {
+          if ((item.type === 'weapon' || item.slot === 'tool') &&
+              (this.playerInventory[i].type === 'weapon' || this.playerInventory[i].slot === 'tool')) {
+            this.playerInventory[i].equippedTo = null;
+          }
+        }
+      }
+    }
+
     item.equippedTo = unitId || null;
 
     if (unitId) {
@@ -1101,6 +1186,11 @@ class TacticsGame {
           unit.heldModelName = newSpec.heldModelName;
           unit.abilities = newSpec.abilities;
           unit.attackRange = newSpec.attackRange;
+
+          // Live hot-swap 3D idle weapon mesh on stage
+          if (this.stageUnitManager?.setUnitWeapon) {
+            this.stageUnitManager.setUnitWeapon(unit.id, newSpec.heldModelName, unit.team);
+          }
 
           this.tacticalHud.addLog(
             `⚔️ EQUIPPED: ${unit.name} wields ${item.name} [3D Model: ${newSpec.heldModelName}].`,
@@ -1325,7 +1415,9 @@ class TacticsGame {
 
 // Bootstrap master game on DOMContentLoaded or immediate execution
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => new TacticsGame());
+  document.addEventListener('DOMContentLoaded', () => {
+    window.tacticsApp = new TacticsGame();
+  });
 } else {
-  new TacticsGame();
+  window.tacticsApp = new TacticsGame();
 }

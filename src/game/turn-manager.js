@@ -60,6 +60,21 @@ export class TurnManager {
   }
 
   /**
+   * Resets turn manager for a new match / battlefield seed.
+   * @param {number} [seed]
+   */
+  reset(seed) {
+    if (seed !== undefined) {
+      this.seed = (seed >>> 0);
+    }
+    this.activeUnit = null;
+    this.tickCount = 0;
+    this.turnCount = 0;
+    this.activeLaw = this._getLawForTurn(0);
+    return this;
+  }
+
+  /**
    * Returns deterministic active FFTA Law rotating every 6 turns.
    */
   _getLawForTurn(turnCount) {

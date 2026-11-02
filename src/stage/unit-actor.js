@@ -423,7 +423,10 @@ export class StageUnitManager {
     if (!name) return null;
     const lower = name.toLowerCase();
     if (lower === 'marble' || lower === 'stone') {
-      return this.marbleMesh ? this.marbleMesh.clone() : null;
+      if (!this.marbleMesh) return null;
+      const mesh = new THREE.Mesh(this.marbleMesh.geometry.clone(), this.marbleMesh.material.clone());
+      mesh.name = `WeaponMesh_marble_${team}`;
+      return mesh;
     }
     const geo = this.models[lower] || this.models.sword;
     if (!geo) return null;
@@ -443,6 +446,36 @@ export class StageUnitManager {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = `WeaponMesh_${lower}_${team}`;
     return mesh;
+  }
+
+  /**
+   * Hot-swap 3D idle weapon mesh on a unit actor live on stage.
+   * @param {string|number|Object} unitOrId
+   * @param {string} weaponName
+   * @param {string} [team]
+   */
+  setUnitWeapon(unitOrId, weaponName, team) {
+    const actor = this._getActor(unitOrId);
+    if (!actor) return;
+
+    const unitTeam = team || actor.team || 'azure';
+    const newMesh = this.createWeaponMesh(weaponName, unitTeam);
+    if (!newMesh) return;
+
+    if (actor.idleWeaponMesh) {
+      if (actor.idleWeaponMesh.material) {
+        actor.idleWeaponMesh.material.dispose();
+      }
+      this.scene.remove(actor.idleWeaponMesh);
+      actor.idleWeaponMesh = null;
+    }
+
+    const aScale = actor.actorScale || 1.0;
+    newMesh.scale.setScalar(0.72 * aScale);
+    newMesh.frustumCulled = false;
+    newMesh.visible = !actor.unit.isDead;
+    this.scene.add(newMesh);
+    actor.idleWeaponMesh = newMesh;
   }
 
   /**
@@ -734,6 +767,10 @@ export class StageUnitManager {
       hitboxMesh.userData.tile = { x: unit.x, z: unit.z, elevation: unit.elevation };
 
       const id = unit.id !== undefined ? unit.id : `unit_${team}_${slotIndex}`;
+      unit.isDead = false;
+      unit.alive = true;
+      if (sprite.group) sprite.group.visible = true;
+      this.setActorOpacity(actor, 1.0);
       this.units.set(id, actor);
     }
   }
@@ -1057,13 +1094,21 @@ export class StageUnitManager {
       defenderActor.carriedMesh = null;
     }
 
-    // Check if defender died
+    // Check if defender died or was healed/revived
+    const isHeal = Boolean(outcome?.isHeal || reactionAnim === 'Revived' || (outcome?.heal && outcome.heal > 0));
+    const defHp = defenderActor.unit.hp ?? defenderActor.unit.currentHp ?? 100;
+
+    if (isHeal || defHp > 0) {
+      this.reviveUnit(defenderActor);
+    }
+
     const isDead =
-      reactionAnim === 'Bounced to Death' ||
-      reactionAnim === 'Dead' ||
-      outcome?.defenderDead ||
-      defenderActor.unit.isDead ||
-      (defenderActor.unit.hp !== undefined && defenderActor.unit.hp <= 0);
+      !isHeal &&
+      defHp <= 0 &&
+      (reactionAnim === 'Bounced to Death' ||
+       reactionAnim === 'Dead' ||
+       outcome?.defenderDead ||
+       defenderActor.unit.isDead);
 
     if (isDead) {
       await this.playDefeat(defenderActor.unit.id);
@@ -1071,11 +1116,47 @@ export class StageUnitManager {
       if (defenderActor.idleWeaponMesh) {
         defenderActor.idleWeaponMesh.visible = true;
       }
-      const defHp = defenderActor.unit.hp ?? defenderActor.unit.currentHp ?? 100;
       const defMax = defenderActor.unit.maxHp ?? 100;
       const isDefLow = defMax > 0 && defHp / defMax < 0.25;
       defenderActor.sprite.play(isDefLow ? 'Critical' : 'Idle', getNow());
     }
+  }
+
+  /**
+   * Fully restores a defeated or wounded unit to living combatant state:
+   * resets isDead/alive, restores sprite opacity to 1.0, and unhides ring, hitbox, and weapon.
+   * @param {string|number|Object} unitOrId
+   */
+  reviveUnit(unitOrId) {
+    const actor = this._getActor(unitOrId);
+    if (!actor) return;
+
+    actor.unit.isDead = false;
+    actor.unit.alive = true;
+
+    if (actor.sprite?.group) {
+      actor.sprite.group.visible = true;
+    }
+    this.setActorOpacity(actor, 1.0);
+
+    if (actor.ring) {
+      actor.ring.visible = true;
+    }
+    if (actor.hitboxMesh) {
+      actor.hitboxMesh.visible = true;
+    }
+    if (actor.idleWeaponMesh) {
+      actor.idleWeaponMesh.visible = true;
+    }
+    if (actor.bossCrown) {
+      actor.bossCrown.visible = true;
+    }
+
+    const getNow = () => performance.now() / 1000;
+    const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
+    const maxHp = actor.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
   }
 
   /**
@@ -1380,8 +1461,26 @@ export class StageUnitManager {
   dispose() {
     for (const actor of this.units.values()) {
       if (actor.sprite?.group) this.scene.remove(actor.sprite.group);
-      if (actor.ring) this.scene.remove(actor.ring);
-      if (actor.bossCrown) this.scene.remove(actor.bossCrown);
+      if (actor.ring) {
+        actor.ring.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m?.dispose?.());
+            else child.material.dispose();
+          }
+        });
+        this.scene.remove(actor.ring);
+      }
+      if (actor.bossCrown) {
+        actor.bossCrown.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m?.dispose?.());
+            else child.material.dispose();
+          }
+        });
+        this.scene.remove(actor.bossCrown);
+      }
       if (actor.idleWeaponMesh) {
         if (actor.idleWeaponMesh.material) actor.idleWeaponMesh.material.dispose();
         this.scene.remove(actor.idleWeaponMesh);

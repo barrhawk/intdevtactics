@@ -15,18 +15,19 @@ export const charCache = new Map();
 export const itemCache = new Map();
 export const craftCache = new Map();
 
-// Polite rate-limiting state
+// Polite rate-limiting state & CORS circuit breaker
 let lastNetworkCallTime = 0;
-const MIN_CALL_INTERVAL_MS = 300;
+const MIN_CALL_INTERVAL_MS = 60;
 let activeCalls = 0;
-const MAX_CONCURRENT_CALLS = 2;
+const MAX_CONCURRENT_CALLS = 4;
+let apiReachable = true;
 
 /**
  * Polite rate limiter and concurrency guard so set.world is never spammed.
  */
 async function throttleNetwork() {
   while (activeCalls >= MAX_CONCURRENT_CALLS) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
   const now = Date.now();
   const elapsed = now - lastNetworkCallTime;
@@ -44,9 +45,9 @@ function releaseThrottle() {
 /**
  * Fetch wrapper with timeout and polite retry.
  */
-export async function fetchWithTimeout(url, timeoutMs = 2800) {
-  if (typeof fetch !== 'function') {
-    throw new Error('fetch is not available in this environment');
+export async function fetchWithTimeout(url, timeoutMs = 800) {
+  if (!apiReachable || typeof fetch !== 'function') {
+    throw new Error('fetch is offline or CORS-blocked');
   }
 
   const controller = new AbortController();
@@ -56,14 +57,16 @@ export async function fetchWithTimeout(url, timeoutMs = 2800) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        Accept: 'application/json',
-        'User-Agent': 'intdevtactics/1.0 (Three.js Tactics)'
+        Accept: 'application/json'
       }
     });
     if (!res.ok) {
       throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
     }
     return await res.json();
+  } catch (err) {
+    apiReachable = false;
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -240,7 +243,7 @@ export async function rollCharacter(seed) {
   try {
     await throttleNetwork();
     const url = `https://set.world/api/roll/character?seed=${normalizedSeed}&equipmentBonus=1`;
-    const data = await fetchWithTimeout(url, 2800);
+    const data = await fetchWithTimeout(url, 600);
     if (data && (data.class || data.attributes)) {
       charCache.set(normalizedSeed, data);
       return data;
@@ -267,7 +270,7 @@ export async function rollItem(seed) {
   try {
     await throttleNetwork();
     const url = `https://set.world/api/roll/item?seed=${normalizedSeed}`;
-    const data = await fetchWithTimeout(url, 2800);
+    const data = await fetchWithTimeout(url, 600);
     if (data && (data.name || data.tierGrade)) {
       itemCache.set(normalizedSeed, data);
       return data;
@@ -295,7 +298,7 @@ export async function craftItem(orbs, seed) {
   try {
     await throttleNetwork();
     const url = `https://set.world/api/craft?orbs=${encodeURIComponent(orbs)}&seed=${normalizedSeed}`;
-    const data = await fetchWithTimeout(url, 2800);
+    const data = await fetchWithTimeout(url, 600);
     if (data && data.item) {
       craftCache.set(cacheKey, data);
       return data;
@@ -734,9 +737,18 @@ export async function generateClanRoster(baseSeed, board) {
     pickedRedPositions.push({ x: 9 - pickedRedPositions.length, z: 8 });
   }
 
+  const seeds = Array.from({ length: 8 }, (_, i) => deriveSeed(normalizedBase, i));
+  const charList = seeds.map((s) => {
+    const norm = s >>> 0;
+    if (!charCache.has(norm)) {
+      charCache.set(norm, generateFallbackCharacter(norm));
+    }
+    return charCache.get(norm);
+  });
+
   for (let i = 0; i < 8; i++) {
-    const unitSeed = deriveSeed(normalizedBase, i);
-    const charData = await rollCharacter(unitSeed);
+    const unitSeed = seeds[i];
+    const charData = charList[i];
 
     const isBlue = i < 4;
     const team = isBlue ? 'azure' : 'crimson';
@@ -761,6 +773,12 @@ export async function generateClanRoster(baseSeed, board) {
 
     if (isBlue) {
       // Azure Clan squad with rich weapon variety across 4 distinct archetypes
+      const heroNames0 = ['Sir Vance', 'Lord Roland', 'Sir Gareth', 'Captain Alistair'];
+      const heroNames1 = ['Archmage Lyra', 'Mystic Selene', 'Oracle Isolde', 'Sage Aurelia'];
+      const heroNames2 = ['Kaelen Hawk', 'Ranger Orion', 'Warden Thorne', 'Marksman Sylas'];
+      const heroNames3 = ['Lady Seraphina', 'Valeria Dawn', 'Freya Starlight', 'Helena Sky'];
+      const pickIdx = (unitSeed >>> 3) % 4;
+
       if (slot === 0) {
         className = 'Knight';
         weaponSpec = mapToolToWeaponSpec({ name: 'Mythril Broadsword', type: 'sword' }, className);
@@ -768,6 +786,7 @@ export async function generateClanRoster(baseSeed, board) {
         rank = 'CHAMPION';
         archetypeTitle = 'Azure Knight';
         scale = 1.0;
+        charName = heroNames0[pickIdx];
       } else if (slot === 1) {
         className = 'Mesmer';
         weaponSpec = mapToolToWeaponSpec({ name: 'Arcane Tome', type: 'tome' }, className);
@@ -775,6 +794,7 @@ export async function generateClanRoster(baseSeed, board) {
         rank = 'MYSTIC';
         archetypeTitle = 'Azure Mage';
         scale = 1.0;
+        charName = heroNames1[pickIdx];
       } else if (slot === 2) {
         className = 'Fusilier';
         weaponSpec = mapToolToWeaponSpec({ name: 'Precision Rifle', type: 'rifle' }, className);
@@ -782,6 +802,7 @@ export async function generateClanRoster(baseSeed, board) {
         rank = 'MARKSMAN';
         archetypeTitle = 'Azure Ranger';
         scale = 1.0;
+        charName = heroNames2[pickIdx];
       } else {
         className = 'Dragoon';
         weaponSpec = mapToolToWeaponSpec({ name: 'Holy Lance', type: 'spear' }, className);
@@ -789,10 +810,16 @@ export async function generateClanRoster(baseSeed, board) {
         rank = 'VANGUARD';
         archetypeTitle = 'Azure Paladin';
         scale = 1.0;
+        charName = heroNames3[pickIdx];
       }
-      charName = charData.name || `Azure ${className}`;
     } else {
       // Crimson Order enemies with 4 guaranteed distinct Enemy Archetypes
+      const bossNames = ['Malakor', 'Vorgath', 'Zarkon', 'Draven'];
+      const tankNames = ['Krag', 'Baelor', 'Grom', 'Thorn'];
+      const hexerNames = ['Moros', 'Xylar', 'Nyx', 'Vesper'];
+      const sniperNames = ['Vane', 'Kael', 'Riven', 'Shade'];
+      const pickIdx = (unitSeed >>> 3) % 4;
+
       if (slot === 0) {
         // Slot 0: Boss Commander - Crimson Warlord
         isBoss = true;
@@ -810,8 +837,7 @@ export async function generateClanRoster(baseSeed, board) {
         charData.attributes = { ...charData.attributes };
         charData.attributes.physicalDamage = Math.round((charData.attributes?.physicalDamage || 22) * 1.15);
         maxHp = Math.round((charData.attributes?.maxHealth || 110) * 1.35);
-        const namePart = charData.name?.split(' ')?.[0] || 'Malakor';
-        charName = `Warlord ${namePart}`;
+        charName = `Warlord ${bossNames[pickIdx]}`;
       } else if (slot === 1) {
         // Slot 1: Vanguard Tank - Blood-Iron Juggernaut
         isBoss = false;
@@ -825,8 +851,7 @@ export async function generateClanRoster(baseSeed, board) {
         charData.attributes = { ...charData.attributes };
         charData.attributes.armor = Math.round((charData.attributes?.armor || 10) * 1.40) + 6;
         maxHp = Math.round((charData.attributes?.maxHealth || 100) * 1.25);
-        const namePart = charData.name?.split(' ')?.[0] || 'Krag';
-        charName = `Juggernaut ${namePart}`;
+        charName = `Juggernaut ${tankNames[pickIdx]}`;
       } else if (slot === 2) {
         // Slot 2: Hexer / Support Caster - Void-Pyre Hexer
         isBoss = false;
@@ -843,8 +868,7 @@ export async function generateClanRoster(baseSeed, board) {
         charData.attributes = { ...charData.attributes };
         charData.attributes.magicDamage = Math.round((charData.attributes?.magicDamage || 20) * 1.35) + 6;
         maxHp = Math.round(charData.attributes?.maxHealth || 90);
-        const namePart = charData.name?.split(' ')?.[0] || 'Moros';
-        charName = `Hexer ${namePart}`;
+        charName = `Hexer ${hexerNames[pickIdx]}`;
       } else {
         // Slot 3: Agile Sniper - Nightshade Deadeye
         isBoss = false;
@@ -860,8 +884,7 @@ export async function generateClanRoster(baseSeed, board) {
         charData.attributes.accuracy = Math.round((charData.attributes?.accuracy || 80) * 1.15) + 5;
         charData.attributes.dodge = Math.round((charData.attributes?.dodge || 15) * 1.30) + 5;
         maxHp = Math.round(charData.attributes?.maxHealth || 92);
-        const namePart = charData.name?.split(' ')?.[0] || 'Vane';
-        charName = `Deadeye ${namePart}`;
+        charName = `Deadeye ${sniperNames[pickIdx]}`;
       }
     }
 

@@ -457,7 +457,12 @@ export class TacticalHUD {
 
     const ct = Math.min(100, Math.max(0, Math.round(unit.ct ?? 100)));
     const power = unit.powerRating || unit.power || 450;
-    const toolName = unit.tool?.name || unit.weapon?.name || unit.heldModelName || unit.weapon || 'Mythril Blade';
+    const rawWepName = unit.weapon?.heldModelName || unit.heldModelName || unit.weaponType || 'sword';
+    const toolName =
+      unit.tool?.name ||
+      unit.weapon?.name ||
+      unit.equipment?.tool?.name ||
+      `Mythril ${String(rawWepName).charAt(0).toUpperCase() + String(rawWepName).slice(1)}`;
     const orbVal = unit.tool?.orbValue || unit.weapon?.orbValue || unit.orbValue || 125;
 
     // 5 primary stats
@@ -1008,17 +1013,15 @@ export class TacticalHUD {
         // crimson-orange HP fill, enemy rank/class badge, and weapon icon
         let roleBadge = `⚔ VANGUARD`;
         if (isBoss) {
-          roleBadge = `☠ WARLORD [BOSS]`;
-        } else if (/mage|hexer|wizard|arcane/i.test(uClass)) {
-          roleBadge = `✦ HEXER`;
-        } else if (/sniper|archer|deadeye|hunter|gunner/i.test(uClass)) {
-          roleBadge = `⌖ DEADEYE`;
-        } else if (/trickster|thief|assassin|shadow/i.test(uClass)) {
-          roleBadge = `🗡 SHADOW`;
-        } else if (/vanguard|knight|warrior|paladin|guardian/i.test(uClass)) {
-          roleBadge = `⚔ VANGUARD`;
+          roleBadge = `☠ ${unit.name || 'WARLORD'} [BOSS]`;
+        } else if (unit.rank === 'HEXER' || /mage|hexer|mesmer|wizard|arcane/i.test(uClass)) {
+          roleBadge = `✦ ${unit.name || 'HEXER'}`;
+        } else if (unit.rank === 'DEADEYE' || /sniper|archer|deadeye|fusilier|gunner/i.test(uClass)) {
+          roleBadge = `⌖ ${unit.name || 'DEADEYE'}`;
+        } else if (unit.rank === 'VANGUARD' || /vanguard|knight|warrior|paladin|guardian/i.test(uClass)) {
+          roleBadge = `⚔ ${unit.name || 'VANGUARD'}`;
         } else {
-          roleBadge = `⚔ ${uClass.toUpperCase()}`;
+          roleBadge = `⚔ ${unit.name || uClass.toUpperCase()}`;
         }
 
         el.innerHTML = `
@@ -1160,30 +1163,104 @@ export class TacticalHUD {
       </div>
     `;
 
+    this.hideVictoryBanner();
     document.body.appendChild(banner);
+    this.activeVictoryBanner = banner;
 
     const restartBtn = banner.querySelector('#btn-banner-restart');
+    let keyListener = null;
+
     const handleRestart = () => {
-      banner.remove();
+      if (keyListener) {
+        window.removeEventListener('keydown', keyListener);
+        keyListener = null;
+        this._victoryKeyListener = null;
+      }
+      this.hideVictoryBanner();
       if (onPlayAgain) onPlayAgain();
       else this.callbacks.onNewSeed?.();
     };
 
     restartBtn.addEventListener('click', handleRestart);
 
-    const keyListener = (e) => {
+    keyListener = (e) => {
       if (e.key === 'Enter') {
-        window.removeEventListener('keydown', keyListener);
         handleRestart();
       }
     };
+    this._victoryKeyListener = keyListener;
     window.addEventListener('keydown', keyListener);
+  }
+
+  /**
+   * Hide and cleanup any active victory/defeat banner.
+   */
+  hideVictoryBanner() {
+    if (this._victoryKeyListener) {
+      window.removeEventListener('keydown', this._victoryKeyListener);
+      this._victoryKeyListener = null;
+    }
+    if (this.activeVictoryBanner) {
+      this.activeVictoryBanner.remove();
+      this.activeVictoryBanner = null;
+    }
+    const existing = document.querySelectorAll('.victory-banner-backdrop');
+    existing.forEach((el) => el.remove());
+  }
+
+  /**
+   * Complete reset of HUD overlays, popups, and panels for a new match/battlefield.
+   */
+  resetBattlefieldHUD() {
+    this.hideVictoryBanner();
+    this.activeUnit = null;
+    this.selectedAbility = null;
+    this.targetUnit = null;
+    this.hoveredTile = null;
+    this.combatForecast = null;
+    this.currentMode = 'standby';
+
+    if (this.elements.commandMenu) {
+      this.elements.commandMenu.style.display = 'none';
+      this.elements.commandMenu.innerHTML = '';
+    }
+    if (this.elements.combatForecast) {
+      this.elements.combatForecast.style.display = 'none';
+      this.elements.combatForecast.innerHTML = '';
+    }
+    if (this.elements.activeCard) {
+      this.elements.activeCard.style.visibility = 'hidden';
+      this.elements.activeCard.innerHTML = '';
+    }
+    if (this.elements.rightSlot) {
+      this.elements.rightSlot.innerHTML = `
+        <div class="tile-inspector-card">
+          <div class="tile-inspector-header">
+            <span>TERRAIN INSPECTOR</span>
+            <span style="color: var(--text-muted);">[STAGE READY]</span>
+          </div>
+          <div class="tile-inspector-title">Hover tile or unit</div>
+          <div class="tile-inspector-meta">
+            <span class="tile-inspector-prop">Elev +0</span>
+            <span class="tile-inspector-prop">Cost 1.0</span>
+          </div>
+        </div>
+      `;
+    }
+    if (this.elements.popupsContainer) {
+      this.elements.popupsContainer.innerHTML = '';
+    }
+    for (const el of this.overheadMap.values()) {
+      el.remove();
+    }
+    this.overheadMap.clear();
   }
 
   /**
    * Destroys the HUD, clears DOM, and unbinds listeners.
    */
   destroy() {
+    this.hideVictoryBanner();
     window.removeEventListener('keydown', this._onKeyDown);
     this.container.innerHTML = '';
     this.overheadMap.clear();

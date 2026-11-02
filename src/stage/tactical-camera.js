@@ -21,9 +21,9 @@ export class TacticalCamera {
     this.elevation = DEFAULT_ELEVATION;
     this.distance = CAMERA_DISTANCE;
 
-    this.step = 0;
-    this.currentAzimuth = DEFAULT_AZIMUTH;
-    this.targetAzimuth = DEFAULT_AZIMUTH;
+    this.step = 4;
+    this.currentAzimuth = DEFAULT_AZIMUTH + 4 * STEP_ANGLE;
+    this.targetAzimuth = this.currentAzimuth;
 
     this.currentFocus = new THREE.Vector3(0, 14, 0);
     this.targetFocus = new THREE.Vector3(0, 14, 0);

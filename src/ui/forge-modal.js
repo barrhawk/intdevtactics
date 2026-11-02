@@ -584,6 +584,20 @@ export class ForgeModal {
     const item = this.state.inventory[itemIndex];
     if (!item) return;
 
+    // If equipping to a unit, clear previously equipped item of same type on that unit
+    if (unitId) {
+      for (let i = 0; i < this.state.inventory.length; i++) {
+        if (i !== itemIndex && this.state.inventory[i].equippedTo === unitId) {
+          if ((item.type === 'weapon' || item.slot === 'tool') &&
+              (this.state.inventory[i].type === 'weapon' || this.state.inventory[i].slot === 'tool')) {
+            this.state.inventory[i].equippedTo = null;
+          } else if (item.type === 'armor' && this.state.inventory[i].type === 'armor') {
+            this.state.inventory[i].equippedTo = null;
+          }
+        }
+      }
+    }
+
     item.equippedTo = unitId || null;
 
     if (unitId) {

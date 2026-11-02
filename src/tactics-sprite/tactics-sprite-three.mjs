@@ -56,7 +56,10 @@ function materialsFor(texture) {
     const base = { map: texture, transparent: true, alphaTest: 0.1, side: THREE.DoubleSide, forceSinglePass: true, depthTest: true, toneMapped: false };
     MATERIALS.set(texture, { body: new THREE.MeshBasicMaterial({ ...base, depthWrite: true }), overlay: new THREE.MeshBasicMaterial({ ...base, depthWrite: false }) });
   }
-  return MATERIALS.get(texture);
+  const mats = MATERIALS.get(texture);
+  mats.body.opacity = 1.0;
+  mats.overlay.opacity = 1.0;
+  return mats;
 }
 
 //NOTE(@jimmylee)
@@ -113,14 +116,18 @@ const _itemBasis = new THREE.Matrix4();
 export function createTacticsSprite(atlas, texture, { facing = 'SE', animation = 'Idle', seconds = 0, scaleX = SCALE_X, scaleY = SCALE_Y } = {}) {
   const player = createPlayer(atlas, { facing, animation, seconds });
   const { width: sheetW, height: sheetH } = atlas.data.sheet;
-  const materials = materialsFor(texture);
+  const baseMaterials = materialsFor(texture);
+  const bodyMaterial = baseMaterials.body.clone();
+  const overlayMaterial = baseMaterials.overlay.clone();
+  bodyMaterial.opacity = 1.0;
+  overlayMaterial.opacity = 1.0;
   const group = new THREE.Group();
   const planes = [];
   //NOTE(@jimmylee)
   //Everything measured in world units follows the world's scale, so a unit in a world of metres keeps its shape.
   const worldScale = scaleX / SCALE_X;
   for (let i = 0; i < MAX_TILES; i++) {
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), i === 0 ? materials.body : materials.overlay);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), i === 0 ? bodyMaterial : overlayMaterial);
     mesh.visible = false;
     mesh.frustumCulled = false;
     planes.push({ mesh, id: '', flipX: false });
@@ -298,6 +305,8 @@ export function createTacticsSprite(atlas, texture, { facing = 'SE', animation =
     },
     dispose() {
       for (const { mesh } of planes) mesh.geometry.dispose();
+      bodyMaterial.dispose();
+      overlayMaterial.dispose();
       group.removeFromParent();
     },
   };

@@ -530,6 +530,7 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     const startHp = defender.hp ?? maxHp;
     defender.hp = Math.min(maxHp, startHp + healPower);
     defender.alive = true;
+    defender.isDead = false;
     const healAmount = defender.hp - startHp;
 
     if (ability.ctBuff) {
@@ -596,6 +597,7 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
   // Apply damage
   defender.hp = Math.max(0, (defender.hp ?? 100) - damage);
   defender.alive = defender.hp > 0;
+  defender.isDead = !defender.alive;
 
   if (!defender.alive) {
     defenderAnim = 'Bounced to Death';
