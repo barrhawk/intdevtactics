@@ -30,6 +30,7 @@ export class IsometricBoard {
     this.tiles = []; // 2D array [z][x]
     this.interactiveMeshes = [];
     this.raycaster = new THREE.Raycaster();
+    this.unitActorManager = null;
 
     // Material definitions
     this.materials = this._createMaterials();
@@ -402,25 +403,92 @@ export class IsometricBoard {
   }
 
   /**
-   * Raycast from mouse cursor to pick hovered tile.
-   * @param {number} clientX
-   * @param {number} clientY
-   * @param {THREE.Camera|TacticalCamera} camera
-   * @param {HTMLCanvasElement} canvas
-   * @returns {{ x: number, z: number, elevation: number, terrain: string }|null}
+   * Register unit actor manager for precise unit body click & raycasting.
+   * @param {Object} unitActorManager
    */
-  pickTile(clientX, clientY, camera, canvas) {
-    if (!canvas || !camera) return null;
-    const rect = canvas.getBoundingClientRect();
-    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
-    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+  setUnitActorManager(unitActorManager) {
+    this.unitActorManager = unitActorManager;
+  }
 
+  /**
+   * Raycast from mouse cursor or NDC coordinates to pick hovered tile.
+   * Prioritizes unit bodies/hitboxes and tile top surfaces over vertical column side walls.
+   * Supports both (clientX, clientY, camera, canvas) and (ndcX, ndcY, camera, unitActorManager).
+   * @param {number} clientXOrNdcX
+   * @param {number} clientYOrNdcY
+   * @param {THREE.Camera|TacticalCamera} camera
+   * @param {HTMLCanvasElement|Object} [canvasOrManager]
+   * @param {Object} [optManager]
+   * @returns {{ x: number, z: number, elevation: number, terrain: string, unit?: Object }|null}
+   */
+  pickTile(clientXOrNdcX, clientYOrNdcY, camera, canvasOrManager, optManager) {
+    if (!camera) return null;
     const cam = camera.camera || camera;
+
+    let ndcX = 0;
+    let ndcY = 0;
+    let manager = optManager || this.unitActorManager || null;
+
+    if (canvasOrManager && typeof canvasOrManager.getBoundingClientRect === 'function') {
+      const rect = canvasOrManager.getBoundingClientRect();
+      ndcX = ((clientXOrNdcX - rect.left) / rect.width) * 2 - 1;
+      ndcY = -((clientYOrNdcY - rect.top) / rect.height) * 2 + 1;
+    } else {
+      ndcX = Number(clientXOrNdcX) || 0;
+      ndcY = Number(clientYOrNdcY) || 0;
+      if (canvasOrManager && (canvasOrManager.units || canvasOrManager._getActor)) {
+        manager = canvasOrManager;
+      }
+    }
+
     this.raycaster.setFromCamera({ x: ndcX, y: ndcY }, cam);
 
-    const intersects = this.raycaster.intersectObjects(this.interactiveMeshes, false);
-    if (intersects.length > 0) {
-      const tile = intersects[0].object.userData.tile;
+    // 1. Raycast against living unit hitboxes / body meshes first so clicking a unit's chest selects their tile
+    if (manager && manager.units) {
+      const unitTargets = [];
+      for (const actor of manager.units.values()) {
+        if (!actor || actor.unit?.isDead || actor.unit?.alive === false) continue;
+        if (actor.hitboxMesh) {
+          unitTargets.push(actor.hitboxMesh);
+        } else if (actor.sprite?.group) {
+          actor.sprite.group.traverse((obj) => {
+            if (obj.isMesh && obj.visible) {
+              obj.userData.unitActor = actor;
+              unitTargets.push(obj);
+            }
+          });
+        }
+      }
+
+      if (unitTargets.length > 0) {
+        const unitHits = this.raycaster.intersectObjects(unitTargets, true);
+        if (unitHits.length > 0) {
+          const firstHit = unitHits[0];
+          const actor = firstHit.object.userData?.unitActor || firstHit.object.parent?.userData?.unitActor;
+          if (actor && actor.unit) {
+            const tx = actor.unit.gridX !== undefined ? actor.unit.gridX : actor.unit.x;
+            const tz = actor.unit.gridZ !== undefined ? actor.unit.gridZ : actor.unit.z;
+            const tile = this.getTile(tx, tz);
+            if (tile) {
+              return {
+                x: tile.x,
+                z: tile.z,
+                elevation: tile.elevation,
+                terrain: tile.terrain,
+                unit: actor.unit
+              };
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Raycast against diorama tile meshes, prioritizing top faces (normal.y > 0.5) over column side walls
+    const tileHits = this.raycaster.intersectObjects(this.interactiveMeshes, false);
+    if (tileHits.length > 0) {
+      const topHit = tileHits.find((h) => h.face && h.face.normal && h.face.normal.y > 0.5);
+      const chosenHit = topHit || tileHits[0];
+      const tile = chosenHit.object.userData?.tile;
       if (tile) {
         return {
           x: tile.x,
@@ -430,12 +498,21 @@ export class IsometricBoard {
         };
       }
     }
+
     return null;
   }
 
   /**
-   * Direction between two tiles matching 3d.internet.dev convention:
-   * E: +x, W: -x, S: +z, N: -z
+   * Direction between two tiles matching Jimmy Lee's coordinate system:
+   * +X (dx > 0, dz === 0) -> 'SE'
+   * +Z (dx === 0, dz > 0) -> 'SW'
+   * -X (dx < 0, dz === 0) -> 'NW'
+   * -Z (dx === 0, dz < 0) -> 'NE'
+   * Diagonals:
+   * dx > 0, dz > 0 -> 'S'
+   * dx < 0, dz > 0 -> 'W'
+   * dx < 0, dz < 0 -> 'N'
+   * dx > 0, dz < 0 -> 'E'
    * @param {number} fromX
    * @param {number} fromZ
    * @param {number} toX
@@ -447,25 +524,28 @@ export class IsometricBoard {
     const dz = toZ - fromZ;
     if (dx === 0 && dz === 0) return 'SE';
 
-    const deg = (Math.atan2(dz, dx) * 180) / Math.PI; // -180 to 180
+    // Exact Jimmy Lee cardinal directions
+    if (dx > 0 && dz === 0) return 'SE';
+    if (dx === 0 && dz > 0) return 'SW';
+    if (dx < 0 && dz === 0) return 'NW';
+    if (dx === 0 && dz < 0) return 'NE';
 
-    // 8 directional sectors:
-    // E:   -22.5 to 22.5
-    // SE:  22.5 to 67.5
-    // S:   67.5 to 112.5
-    // SW:  112.5 to 157.5
-    // W:   >= 157.5 or < -157.5
-    // NW:  -157.5 to -112.5
-    // N:   -112.5 to -67.5
-    // NE:  -67.5 to -22.5
-    if (deg >= -22.5 && deg < 22.5) return 'E';
-    if (deg >= 22.5 && deg < 67.5) return 'SE';
-    if (deg >= 67.5 && deg < 112.5) return 'S';
-    if (deg >= 112.5 && deg < 157.5) return 'SW';
-    if (deg >= 157.5 || deg < -157.5) return 'W';
-    if (deg >= -157.5 && deg < -112.5) return 'NW';
-    if (deg >= -112.5 && deg < -67.5) return 'N';
-    return 'NE';
+    // Diagonals
+    if (dx > 0 && dz > 0) return 'S';
+    if (dx < 0 && dz > 0) return 'W';
+    if (dx < 0 && dz < 0) return 'N';
+    if (dx > 0 && dz < 0) return 'E';
+
+    // General angle fallback
+    const deg = (Math.atan2(dz, dx) * 180) / Math.PI; // -180 to 180
+    if (deg >= -22.5 && deg < 22.5) return 'SE';
+    if (deg >= 22.5 && deg < 67.5) return 'S';
+    if (deg >= 67.5 && deg < 112.5) return 'SW';
+    if (deg >= 112.5 && deg < 157.5) return 'W';
+    if (deg >= 157.5 || deg < -157.5) return 'NW';
+    if (deg >= -157.5 && deg < -112.5) return 'N';
+    if (deg >= -112.5 && deg < -67.5) return 'NE';
+    return 'E';
   }
 
   /**
@@ -604,6 +684,45 @@ export class IsometricBoard {
 
   dispose() {
     this.clearHighlights();
-    this.boardGroup.clear();
+
+    if (this.boardGroup) {
+      this.boardGroup.traverse((obj) => {
+        if (obj.geometry) {
+          obj.geometry.dispose();
+        }
+        if (obj.material) {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((m) => m?.dispose?.());
+          } else {
+            obj.material?.dispose?.();
+          }
+        }
+      });
+      this.boardGroup.clear();
+      if (this.scene) {
+        this.scene.remove(this.boardGroup);
+      }
+    }
+
+    if (this.materials) {
+      Object.values(this.materials).forEach((m) => m?.dispose?.());
+    }
+
+    if (this.highlightPlaneGeo) {
+      this.highlightPlaneGeo.dispose();
+    }
+    if (this.highlightBorderGeo) {
+      this.highlightBorderGeo.dispose();
+    }
+    if (this.moveMaterial) this.moveMaterial.dispose();
+    if (this.moveBorderMaterial) this.moveBorderMaterial.dispose();
+    if (this.attackMaterial) this.attackMaterial.dispose();
+    if (this.supportMaterial) this.supportMaterial.dispose();
+    if (this.activeUnitMaterial) this.activeUnitMaterial.dispose();
+    if (this.activeUnitBorderMaterial) this.activeUnitBorderMaterial.dispose();
+
+    this.interactiveMeshes = [];
+    this.tiles = [];
+    this.unitActorManager = null;
   }
 }
