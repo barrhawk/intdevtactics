@@ -346,8 +346,46 @@ export function salvageItem(rawItemOrItem) {
 }
 
 /**
- * Maps a Set.world tool item and class to one of the 7 held models in set-items.glb
- * ('sword', 'katana', 'spear', 'rifle', 'tome', 'harp', 'shield') plus 'bow'.
+ * Upgrades an item's tier, grade, finishTier, and power using Set Orbs.
+ * - Increments item.boostStars = Math.min(5, (item.boostStars || 0) + 1).
+ * - Upgrades item.tier & item.grade along ['D', 'C', 'B', 'A', 'S'].
+ * - Sets item.finishTier along ['bronze', 'iron', 'mythril', 'gold', 'adamantite'].
+ * - Increases item.orbValue = (item.orbValue || 100) + orbsSpent and boosts weapon damage multiplier item.boostMult = 1 + item.boostStars * 0.18.
+ * - Returns { item, stars: item.boostStars, finishTier: item.finishTier, tier: item.tier }.
+ */
+export function boostItemWithOrbs(item, orbsSpent = 50) {
+  if (!item) return null;
+  item.boostStars = Math.min(5, (item.boostStars || 0) + 1);
+
+  const TIERS = ['D', 'C', 'B', 'A', 'S'];
+  const FINISH_TIERS = ['bronze', 'iron', 'mythril', 'gold', 'adamantite'];
+
+  const currentGrade = (item.grade || item.tier || item.tierGrade || 'D').toUpperCase();
+  let idx = TIERS.indexOf(currentGrade);
+  let nextIdx = idx >= 0 ? Math.min(TIERS.length - 1, idx + 1) : Math.min(TIERS.length - 1, item.boostStars - 1);
+  const upgradedTier = TIERS[nextIdx];
+
+  item.tier = upgradedTier;
+  item.grade = upgradedTier;
+  item.tierGrade = upgradedTier;
+
+  const finishIdx = Math.max(0, Math.min(FINISH_TIERS.length - 1, item.boostStars - 1));
+  item.finishTier = FINISH_TIERS[finishIdx];
+
+  item.orbValue = (item.orbValue || 100) + orbsSpent;
+  item.boostMult = 1 + item.boostStars * 0.18;
+
+  return {
+    item,
+    stars: item.boostStars,
+    finishTier: item.finishTier,
+    tier: item.tier
+  };
+}
+
+/**
+ * Maps a Set.world tool item and class to one of the held models in set-items.glb
+ * ('sword', 'katana', 'spear', 'rifle', 'tome', 'harp', 'shield', 'bow', 'cloth_bag').
  */
 export function mapToolToWeaponSpec(toolItem, className) {
   const itemName = ((toolItem && (toolItem.name || toolItem.type)) || '').toLowerCase();
@@ -396,8 +434,8 @@ export function mapToolToWeaponSpec(toolItem, className) {
       baseAnimPrefix: 'Swing',
       abilities: [
         {
-          id: 'iaido_slash',
-          name: 'Iaido Slash',
+          id: 'iaido_draw',
+          name: 'Iaido Draw',
           range: { min: 1, max: 1 },
           anim: 'Katana Use',
           animPrefix: 'Katana Use',
@@ -406,21 +444,86 @@ export function mapToolToWeaponSpec(toolItem, className) {
           description: 'Swift single-stroke slash drawing a lightning-fast edge.'
         },
         {
-          id: 'shadow_throw',
-          name: 'Shadow Throw',
+          id: 'blade_throw',
+          name: 'Blade Throw',
           range: { min: 2, max: 4 },
           anim: 'Weapon Throw',
           animPrefix: 'Weapon Throw',
-          powerMult: 1.0,
+          powerMult: 1.05,
           costMp: 4,
-          description: 'Hurls a concealed throwing blade from the shadows.'
+          description: 'Hurls a concealed throwing blade with deadly precision.'
         }
       ]
     };
   }
 
-  // 3. Rifle (rifle, gun, musket, pistol, crossbow, gunner, fusilier, machinist)
-  if (/(rifle|gun|musket|pistol|crossbow|gunner|fusilier|machinist)/i.test(combined)) {
+  // 3. Bow (bow, longbow, shortbow, crossbow, archer, hunter)
+  if (/(bow|longbow|shortbow|crossbow|archer|hunter)/i.test(combined)) {
+    return {
+      weaponType: 'bow',
+      heldModelName: 'bow',
+      attackRange: { min: 2, max: 5 },
+      baseAnimPrefix: 'Bow',
+      abilities: [
+        {
+          id: 'arc_shot',
+          name: 'Arc Shot',
+          range: { min: 2, max: 5 },
+          anim: 'Bow Mid',
+          animPrefix: 'Bow',
+          powerMult: 1.15,
+          costMp: 0,
+          description: 'High-arc arrow shot delivering precise piercing damage.'
+        },
+        {
+          id: 'sky_volley',
+          name: 'Sky Volley',
+          range: { min: 3, max: 6 },
+          anim: 'Bow High',
+          animPrefix: 'Bow',
+          powerMult: 1.35,
+          costMp: 8,
+          description: 'Lofts a deadly rain of arrows descending from high ballistic altitude.'
+        }
+      ]
+    };
+  }
+
+  // 4. Cloth Bag Flail (bag, pouch, flail, sachel, alchemist, merchant)
+  if (/(bag|pouch|flail|sachel|alchemist|merchant)/i.test(combined)) {
+    return {
+      weaponType: 'cloth_bag',
+      heldModelName: 'cloth_bag',
+      attackRange: { min: 1, max: 2 },
+      baseAnimPrefix: 'Swing',
+      abilities: [
+        {
+          id: 'weighted_whip',
+          name: 'Weighted Bag Whip',
+          range: { min: 1, max: 2 },
+          anim: 'Swing Mid',
+          animPrefix: 'Swing',
+          powerMult: 1.20,
+          costMp: 4,
+          description: 'Whirls a weighted merchant sack in a vicious momentum whip.'
+        },
+        {
+          id: 'orb_concussion',
+          name: 'Orb Concussion',
+          range: { min: 1, max: 2 },
+          anim: 'Swing High',
+          animPrefix: 'Swing',
+          powerMult: 1.35,
+          statusProc: 'confused',
+          costMp: 8,
+          description: 'Cracks an orb-dense pouch against the foe, disorienting their senses.'
+        }
+      ]
+    };
+  }
+
+  // 5. Rifle (rifle, gun, musket, pistol, gunner, fusilier, machinist)
+  if (/(rifle|gun|musket|pistol|gunner|fusilier|machinist)/i.test(combined)) {
     return {
       weaponType: 'rifle',
       heldModelName: 'rifle',
@@ -451,39 +554,7 @@ export function mapToolToWeaponSpec(toolItem, className) {
     };
   }
 
-  // 4. Bow (bow, longbow, shortbow, ranger, archer, hunter)
-  if (/(bow|longbow|shortbow|ranger|archer|hunter)/i.test(combined)) {
-    return {
-      weaponType: 'bow',
-      heldModelName: 'sword',
-      attackRange: { min: 2, max: 5 },
-      baseAnimPrefix: 'Bow',
-      abilities: [
-        {
-          id: 'arc_volley',
-          name: 'Arc Volley',
-          range: { min: 2, max: 5 },
-          anim: 'Bow High',
-          animPrefix: 'Bow',
-          powerMult: 1.20,
-          costMp: 5,
-          description: 'High ballistic arrow volley arching cleanly over obstacles.'
-        },
-        {
-          id: 'stone_toss',
-          name: 'Stone Toss',
-          range: { min: 1, max: 3 },
-          anim: 'Item Throw High Release',
-          animPrefix: 'Item Throw',
-          powerMult: 0.85,
-          costMp: 0,
-          description: 'Hurls a sling projectile or rough stone at mid range.'
-        }
-      ]
-    };
-  }
-
-  // 5. Tome (tome, book, staff, wand, orb, mesmer, oracle, scholar, mage, wizard, warlock)
+  // 6. Tome (tome, book, staff, wand, orb, mesmer, oracle, scholar, mage, wizard, warlock)
   if (/(tome|book|staff|wand|orb|mesmer|oracle|scholar|mage|wizard|warlock)/i.test(combined)) {
     return {
       weaponType: 'tome',
@@ -495,19 +566,19 @@ export function mapToolToWeaponSpec(toolItem, className) {
           id: 'aether_bolt',
           name: 'Aether Bolt',
           range: { min: 1, max: 4 },
-          anim: 'Casting',
-          animPrefix: 'Casting',
+          anim: 'Read Book',
+          animPrefix: 'Read Book',
           isMagic: true,
           powerMult: 1.25,
           costMp: 6,
-          description: 'Condenses raw aether into an arcane shockwave.'
+          description: 'Recites an incantation from the open spellbook into an arcane shockwave.'
         },
         {
           id: 'codex_invocation',
           name: 'Codex Invocation',
           range: { min: 1, max: 3 },
-          anim: 'Read Book',
-          animPrefix: 'Read Book',
+          anim: 'Read Book 2',
+          animPrefix: 'Read Book 2',
           isMagic: true,
           aoe: 1,
           powerMult: 1.40,
@@ -529,7 +600,7 @@ export function mapToolToWeaponSpec(toolItem, className) {
     };
   }
 
-  // 6. Harp (harp, lute, horn, flute, herald, bard, minstrel, cantor)
+  // 7. Harp (harp, lute, horn, flute, herald, bard, minstrel, cantor)
   if (/(harp|lute|horn|flute|herald|bard|minstrel|cantor)/i.test(combined)) {
     return {
       weaponType: 'harp',
@@ -553,8 +624,8 @@ export function mapToolToWeaponSpec(toolItem, className) {
           id: 'resonant_chord',
           name: 'Resonant Chord',
           range: { min: 1, max: 4 },
-          anim: 'Singing',
-          animPrefix: 'Singing',
+          anim: 'Play Instrument',
+          animPrefix: 'Play Instrument',
           isMagic: true,
           powerMult: 1.10,
           costMp: 5,
@@ -564,7 +635,7 @@ export function mapToolToWeaponSpec(toolItem, className) {
     };
   }
 
-  // 7. Shield (shield, buckler, aegis, bulwark, juggernaut, defender)
+  // 8. Shield (shield, buckler, aegis, bulwark, juggernaut, defender)
   if (/(shield|buckler|aegis|bulwark|juggernaut|defender)/i.test(combined)) {
     return {
       weaponType: 'shield',
@@ -598,7 +669,7 @@ export function mapToolToWeaponSpec(toolItem, className) {
     };
   }
 
-  // 8. Default: Sword (sword, greatsword, mace, hammer, knight, etc.)
+  // 9. Default: Sword (sword, greatsword, mace, hammer, knight, etc.)
   return {
     weaponType: 'sword',
     heldModelName: 'sword',
@@ -650,19 +721,19 @@ function isWalkableNonWater(board, x, z) {
   if (typeof board.getTile === 'function') {
     const tile = board.getTile(x, z);
     if (!tile) return false;
-    return !tile.isWater && !tile.water && tile.type !== 'water';
+    return tile.passable !== false && !tile.isWater && !tile.water && tile.type !== 'water' && tile.terrain !== 'water';
   }
   if (board.tiles) {
     if (Array.isArray(board.tiles[z])) {
       const tile = board.tiles[z][x];
       if (!tile) return false;
-      return !tile.isWater && !tile.water && tile.type !== 'water';
+      return tile.passable !== false && !tile.isWater && !tile.water && tile.type !== 'water' && tile.terrain !== 'water';
     }
     if (Array.isArray(board.tiles)) {
       const width = board.width || 10;
       const tile = board.tiles[z * width + x];
       if (!tile) return false;
-      return !tile.isWater && !tile.water && tile.type !== 'water';
+      return tile.passable !== false && !tile.isWater && !tile.water && tile.type !== 'water' && tile.terrain !== 'water';
     }
   }
   return true;
@@ -692,10 +763,103 @@ function getTileElevation(board, x, z) {
 }
 
 /**
+ * Generates a full 6-slot Set.world equipment paperdoll
+ * (tool, offhand, head, chest, legs, finger) with readable names and stats.
+ */
+export function generateFullEquipment(unitSeed, charClass, weaponSpec, grade = 'C') {
+  const rng = createSeededRng(unitSeed);
+
+  const wepPrefix = weaponSpec.elementalPrefix || 'Mythril';
+  const wepName = weaponSpec.name || (weaponSpec.weaponType.charAt(0).toUpperCase() + weaponSpec.weaponType.slice(1));
+  const toolItem = {
+    name: `${wepPrefix} ${wepName}`,
+    slot: 'tool',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    boostStars: 0,
+    boostMult: 1.0,
+    orbValue: 125,
+    stats: { physicalDamage: 22, magicDamage: 18 }
+  };
+
+  const offhandNames = ['Aegis Buckler', 'Parrying Rondel', 'Arcane Crest', 'Tactical Quiver', 'Runed Aegis'];
+  const headNames = ['Knight Barbute', 'Circlet of Wisdom', 'Marksman Hood', 'Dragoon Visor', 'Iron Helm'];
+  const chestNames = ['Dragon-Scale Cuirass', 'Robes of the Archmage', 'Padded Brigandine', 'Steel Breastplate', 'Tunic of the Wind'];
+  const legsNames = ['Greaves of Swiftness', 'Plate Leggings', 'Ranger Chausses', 'Silken Breeches', 'Iron Sabatons'];
+  const fingerNames = ['Band of Might', 'Ring of Astral Celerity', 'Seal of the Azure King', 'Signet of Warding', 'Ring of Fortune'];
+
+  const offhand = {
+    name: rng.choice(offhandNames),
+    slot: 'offhand',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 65,
+    stats: { armor: 6, dodge: 4 }
+  };
+
+  const head = {
+    name: rng.choice(headNames),
+    slot: 'head',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 50,
+    stats: { armor: 4, accuracy: 5 }
+  };
+
+  const chest = {
+    name: rng.choice(chestNames),
+    slot: 'chest',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 90,
+    stats: { armor: 10, maxHpBonus: 25 }
+  };
+
+  const legs = {
+    name: rng.choice(legsNames),
+    slot: 'legs',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 55,
+    stats: { armor: 5, walkSpeedBonus: 0.1 }
+  };
+
+  const finger = {
+    name: rng.choice(fingerNames),
+    slot: 'finger',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 75,
+    stats: { critBonus: 5, magicDamage: 6 }
+  };
+
+  return {
+    tool: toolItem,
+    offhand,
+    head,
+    chest,
+    legs,
+    finger
+  };
+}
+
+/**
  * Generates an 8-unit tactical clan roster (4 Blue Azure Clan, 4 Red Crimson Order)
  * placed on valid non-water tiles of a 10x10 board.
  */
-export async function generateClanRoster(baseSeed, board) {
+export async function generateClanRoster(baseSeed, board, options = {}) {
   const normalizedBase = (baseSeed >>> 0);
   const units = [];
 
@@ -775,7 +939,6 @@ export async function generateClanRoster(baseSeed, board) {
       // Azure Clan squad with rich weapon variety across 4 distinct archetypes
       const heroNames0 = ['Sir Vance', 'Lord Roland', 'Sir Gareth', 'Captain Alistair'];
       const heroNames1 = ['Archmage Lyra', 'Mystic Selene', 'Oracle Isolde', 'Sage Aurelia'];
-      const heroNames2 = ['Kaelen Hawk', 'Ranger Orion', 'Warden Thorne', 'Marksman Sylas'];
       const heroNames3 = ['Lady Seraphina', 'Valeria Dawn', 'Freya Starlight', 'Helena Sky'];
       const pickIdx = (unitSeed >>> 3) % 4;
 
@@ -796,13 +959,18 @@ export async function generateClanRoster(baseSeed, board) {
         scale = 1.0;
         charName = heroNames1[pickIdx];
       } else if (slot === 2) {
-        className = 'Fusilier';
-        weaponSpec = mapToolToWeaponSpec({ name: 'Precision Rifle', type: 'rifle' }, className);
+        // Azure Slot 2: Ranger Orion with choice between bow and rifle (showcasing both bow and rifle on the board)
+        const isAzureBow = (normalizedBase % 2 !== 0);
+        className = isAzureBow ? 'Archer' : 'Fusilier';
+        weaponSpec = mapToolToWeaponSpec(
+          isAzureBow ? { name: 'Mythril Longbow', type: 'bow' } : { name: 'Precision Rifle', type: 'rifle' },
+          className
+        );
         paletteId = 'azure_ranger';
         rank = 'MARKSMAN';
-        archetypeTitle = 'Azure Ranger';
+        archetypeTitle = isAzureBow ? 'Azure Ranger' : 'Azure Marksman';
         scale = 1.0;
-        charName = heroNames2[pickIdx];
+        charName = 'Ranger Orion';
       } else {
         className = 'Dragoon';
         weaponSpec = mapToolToWeaponSpec({ name: 'Holy Lance', type: 'spear' }, className);
@@ -817,27 +985,58 @@ export async function generateClanRoster(baseSeed, board) {
       const bossNames = ['Malakor', 'Vorgath', 'Zarkon', 'Draven'];
       const tankNames = ['Krag', 'Baelor', 'Grom', 'Thorn'];
       const hexerNames = ['Moros', 'Xylar', 'Nyx', 'Vesper'];
-      const sniperNames = ['Vane', 'Kael', 'Riven', 'Shade'];
       const pickIdx = (unitSeed >>> 3) % 4;
 
       if (slot === 0) {
-        // Slot 0: Boss Commander - Crimson Warlord
-        isBoss = true;
-        rank = 'COMMANDER';
-        archetypeTitle = 'Crimson Warlord';
-        paletteId = 'crimson_warlord';
-        scale = 1.18;
-        const bossChoice = (unitSeed % 2 === 0);
-        className = bossChoice ? 'Samurai' : 'Dragoon';
-        weaponSpec = mapToolToWeaponSpec(
-          bossChoice ? { name: 'Blood Katana', type: 'katana' } : { name: 'Dread Spear', type: 'spear' },
-          className
-        );
-        // +15% ATK bonus, +35% Boss HP bonus
-        charData.attributes = { ...charData.attributes };
-        charData.attributes.physicalDamage = Math.round((charData.attributes?.physicalDamage || 22) * 1.15);
-        maxHp = Math.round((charData.attributes?.maxHealth || 110) * 1.35);
-        charName = `Warlord ${bossNames[pickIdx]}`;
+        if (options && options.raidBossMode) {
+          // Overlord Malakor [250x RAID BOSS]
+          isBoss = true;
+          rank = 'COMMANDER';
+          archetypeTitle = '250x Raid Overlord';
+          paletteId = 'crimson_warlord';
+          scale = 1.42;
+          className = 'Samurai';
+          charName = 'Overlord Malakor [250x RAID BOSS]';
+          const baseHp = charData.attributes?.maxHealth || 110;
+          maxHp = Math.round(baseHp * 2.4);
+
+          weaponSpec = mapToolToWeaponSpec({ name: 'Adamantite Blood Katana', type: 'katana' }, className);
+          const sovereignCataclysm = {
+            id: 'sovereign_cataclysm',
+            name: 'Sovereign Cataclysm',
+            range: { min: 1, max: 3 },
+            anim: 'Katana Use',
+            animPrefix: 'Katana Use',
+            powerMult: 1.65,
+            statusProc: 'frozen',
+            costMp: 10,
+            aoe: 1,
+            description: 'Unleashes devastating sovereign apocalyptic cold, freezing all in its path.'
+          };
+          weaponSpec.abilities.unshift(sovereignCataclysm);
+          weaponSpec.elementalPrefix = 'Boreal';
+          weaponSpec.statusProc = 'frozen';
+          weaponSpec.finishTier = 'adamantite';
+          weaponSpec.boostStars = 5;
+          weaponSpec.boostMult = 1.90;
+        } else {
+          // Slot 0: Boss Commander - Crimson Warlord
+          isBoss = true;
+          rank = 'COMMANDER';
+          archetypeTitle = 'Crimson Warlord';
+          paletteId = 'crimson_warlord';
+          scale = 1.18;
+          const bossChoice = (unitSeed % 2 === 0);
+          className = bossChoice ? 'Samurai' : 'Dragoon';
+          weaponSpec = mapToolToWeaponSpec(
+            bossChoice ? { name: 'Blood Katana', type: 'katana' } : { name: 'Dread Spear', type: 'spear' },
+            className
+          );
+          charData.attributes = { ...charData.attributes };
+          charData.attributes.physicalDamage = Math.round((charData.attributes?.physicalDamage || 22) * 1.15);
+          maxHp = Math.round((charData.attributes?.maxHealth || 110) * 1.35);
+          charName = `Warlord ${bossNames[pickIdx]}`;
+        }
       } else if (slot === 1) {
         // Slot 1: Vanguard Tank - Blood-Iron Juggernaut
         isBoss = false;
@@ -871,21 +1070,63 @@ export async function generateClanRoster(baseSeed, board) {
         charName = `Hexer ${hexerNames[pickIdx]}`;
       } else {
         // Slot 3: Agile Sniper - Nightshade Deadeye
+        // 50/50 seeded choice between 'bow' ('Nightshade Longbow') and 'rifle' ('Night Sniper'), defaulting on even seeds to 'bow'
         isBoss = false;
         rank = 'DEADEYE';
         archetypeTitle = 'Nightshade Deadeye';
         paletteId = 'crimson_deadeye';
         scale = 0.94;
-        className = (unitSeed % 2 === 0) ? 'Fusilier' : 'Archer';
-        weaponSpec = mapToolToWeaponSpec({ name: 'Night Sniper', type: 'rifle' }, className);
+        const isEnemyBow = (normalizedBase % 2 === 0) || (unitSeed % 2 === 0);
+        className = isEnemyBow ? 'Archer' : 'Fusilier';
+        weaponSpec = mapToolToWeaponSpec(
+          isEnemyBow ? { name: 'Nightshade Longbow', type: 'bow' } : { name: 'Night Sniper', type: 'rifle' },
+          className
+        );
         // High SPD, accuracy, and dodge
         charData.attributes = { ...charData.attributes };
         charData.attributes.walkSpeed = parseFloat(((charData.attributes?.walkSpeed || 1.1) * 1.20).toFixed(2));
         charData.attributes.accuracy = Math.round((charData.attributes?.accuracy || 80) * 1.15) + 5;
         charData.attributes.dodge = Math.round((charData.attributes?.dodge || 15) * 1.30) + 5;
         maxHp = Math.round(charData.attributes?.maxHealth || 92);
-        charName = `Deadeye ${sniperNames[pickIdx]}`;
+        charName = 'Deadeye Vane';
       }
+    }
+
+    // Assign every unit's weapon an Elemental Prefix (elementalPrefix & statusProc)
+    const ELEMENTAL_PROCS = [
+      { prefix: 'Boreal', statusProc: 'frozen' },
+      { prefix: 'Astral', statusProc: 'sleeping' },
+      { prefix: 'Chaotic', statusProc: 'confused' },
+      { prefix: 'Celestial', statusProc: 'floating' },
+      { prefix: 'Fiery', statusProc: 'burning' }
+    ];
+
+    if (!weaponSpec.elementalPrefix) {
+      const elem = ELEMENTAL_PROCS[(unitSeed + i) % ELEMENTAL_PROCS.length];
+      weaponSpec.elementalPrefix = elem.prefix;
+      weaponSpec.statusProc = elem.statusProc;
+    }
+
+    const elementalPrefix = weaponSpec.elementalPrefix;
+    const statusProc = weaponSpec.statusProc;
+    let initialStatus = null;
+    let isFloating = false;
+
+    if (elementalPrefix === 'Celestial' || statusProc === 'floating') {
+      initialStatus = 'floating';
+      isFloating = true;
+    }
+
+    const isRaidBoss = !!(slot === 0 && !isBlue && options && options.raidBossMode);
+    const unitGrade = isRaidBoss ? 'S' : (charData.tierGrade || 'C');
+    const fullEquipment = generateFullEquipment(unitSeed, className, weaponSpec, unitGrade);
+    if (isRaidBoss) {
+      fullEquipment.tool.finishTier = 'adamantite';
+      fullEquipment.tool.boostStars = 5;
+      fullEquipment.tool.tier = 'S';
+      fullEquipment.tool.grade = 'S';
+      fullEquipment.tool.tierGrade = 'S';
+      fullEquipment.tool.boostMult = 1.90;
     }
 
     const hp = maxHp;
@@ -905,11 +1146,16 @@ export async function generateClanRoster(baseSeed, board) {
       job: className,
       class: className,
       isBoss,
+      isRaidBoss,
       rank,
       archetypeTitle,
       paletteId,
       scale,
-      grade: charData.tierGrade || 'C',
+      grade: unitGrade,
+      tier: unitGrade,
+      tierGrade: unitGrade,
+      finishTier: isRaidBoss ? 'adamantite' : 'bronze',
+      boostStars: isRaidBoss ? 5 : 0,
       hp,
       maxHp,
       mp: 40,
@@ -929,8 +1175,13 @@ export async function generateClanRoster(baseSeed, board) {
       weaponType: weaponSpec.weaponType,
       weaponModel: weaponSpec.heldModelName,
       abilities: weaponSpec.abilities,
+      elementalPrefix,
+      statusProc,
+      prefix: elementalPrefix,
+      status: initialStatus,
+      isFloating,
       stats: charData.attributes || {},
-      equipment: charData.equipment || {},
+      equipment: fullEquipment,
       yellowCards: 0,
       redCards: 0,
       rawCharacter: charData

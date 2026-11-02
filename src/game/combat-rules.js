@@ -4,6 +4,8 @@
  * Directional Angles, Animation Resolution, and Combat Forecast & Resolution.
  */
 
+import { deriveSeed, generateFallbackItem } from './setworld-client.js';
+
 export const DIRECTIONS_8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 /**
@@ -152,17 +154,20 @@ export function getBoardTile(board, x, z) {
 }
 
 /**
- * Checks if a tile is water/impassable.
+ * Checks if a tile is water (crystal river).
  */
-function isWaterTile(tile) {
+export function isWaterTile(tile) {
   if (!tile) return false;
-  return !!(tile.isWater || tile.water || tile.type === 'water' || tile.terrain === 'water' || tile.passable === false);
+  return !!(tile.isWater || tile.water || tile.type === 'water' || tile.terrain === 'water');
 }
 
 /**
  * Computes all reachable tiles using BFS / Dijkstra from unit position.
  * - Max distance: unit.moveRange
- * - Cannot step onto impassable water or tiles occupied by living enemies
+ * - Shallow crystal river tiles (tile.terrain === 'water' || tile.isWater) are wadeable (passable !== false).
+ * - Moving into a water tile costs 2 movement points (stepCost = 2), UNLESS unit.status === 'floating',
+ *   unit.isFloating, unit.prefix === 'Celestial', or unit.elementalPrefix === 'Celestial' (stepCost = 1).
+ * - Cannot step onto impassable non-water obstacles or tiles occupied by living enemies.
  * - Step requires |nextTile.elevation - currTile.elevation| <= unit.jumpHeight
  * - Cannot end move on a tile occupied by ANY living unit (except start tile)
  *
@@ -216,7 +221,15 @@ export function getReachableTiles(unit, board, allUnits = []) {
     { dx: 0, dz: -1 }
   ];
 
+  const isFloating = unit.status === 'floating' ||
+    unit.isFloating ||
+    unit.prefix === 'Celestial' ||
+    unit.elementalPrefix === 'Celestial' ||
+    unit.weapon?.elementalPrefix === 'Celestial';
+
   while (queue.length > 0) {
+    // Dijkstra priority: lowest cost first
+    queue.sort((a, b) => a.cost - b.cost);
     const current = queue.shift();
     if (current.cost >= moveRange) continue;
 
@@ -230,7 +243,11 @@ export function getReachableTiles(unit, board, allUnits = []) {
       if (nx < 0 || nx >= boardWidth || nz < 0 || nz >= boardHeight) continue;
 
       const nTile = getBoardTile(board, nx, nz);
-      if (!nTile || isWaterTile(nTile)) continue;
+      if (!nTile) continue;
+
+      // Shallow crystal river tiles (tile.terrain === 'water' || tile.isWater) are wadeable (passable !== false)
+      const isWater = isWaterTile(nTile);
+      if (!isWater && nTile.passable === false) continue;
 
       const nKey = `${nx},${nz}`;
       // Cannot step through living enemies
@@ -240,7 +257,11 @@ export function getReachableTiles(unit, board, allUnits = []) {
       // Elevation jump check
       if (Math.abs(nElev - currElev) > jumpHeight) continue;
 
-      const nextCost = current.cost + 1;
+      // Moving into a water tile costs 2 movement points unless floating / Celestial (costs 1)
+      const stepCost = (isWater && !isFloating) ? 2 : 1;
+      const nextCost = current.cost + stepCost;
+      if (nextCost > moveRange) continue;
+
       if (!bestCost.has(nKey) || nextCost < bestCost.get(nKey)) {
         bestCost.set(nKey, nextCost);
         const nextEntry = {
@@ -338,7 +359,7 @@ export function resolveAttackAnimation(unit, ability, stance = 'Mid') {
       return ability.anim;
     }
     // Fixed animations without stances
-    if (['Katana Use', 'Read Book', 'Play Instrument', 'Singing', 'Casting', 'Dragoon Jump 3', 'Weapon Throw', 'Cast Revive'].includes(ability.anim)) {
+    if (['Katana Use', 'Read Book', 'Read Book 2', 'Play Instrument', 'Singing', 'Casting', 'Dragoon Jump 3', 'Weapon Throw', 'Cast Revive'].includes(ability.anim)) {
       return ability.anim;
     }
   }
@@ -346,6 +367,15 @@ export function resolveAttackAnimation(unit, ability, stance = 'Mid') {
   if (ability?.animPrefix) {
     if (ability.animPrefix === 'Item Throw') {
       return `Item Throw ${stance} Release`;
+    }
+    if (ability.animPrefix === 'Read Book' || ability.animPrefix === 'Read Book 2') {
+      return ability.animPrefix;
+    }
+    if (ability.animPrefix === 'Play Instrument') {
+      return 'Play Instrument';
+    }
+    if (ability.animPrefix === 'Katana Use') {
+      return 'Katana Use';
     }
     return `${ability.animPrefix} ${stance}`;
   }
@@ -359,10 +389,12 @@ export function resolveAttackAnimation(unit, ability, stance = 'Mid') {
       return `Gun ${stance}`;
     case 'bow':
       return `Bow ${stance}`;
+    case 'cloth_bag':
+      return `Swing ${stance}`;
     case 'katana':
       return `Swing ${stance}`;
     case 'tome':
-      return 'Casting';
+      return 'Read Book';
     case 'harp':
       return 'Play Instrument';
     case 'unarmed':
@@ -397,7 +429,7 @@ export function calculateCombatForecast(attacker, defender, ability, board, acti
   const attackAngle = getRelativeDirection(attacker, defender);
 
   const animationName = resolveAttackAnimation(attacker, ability, stance);
-  const heldModelName = attacker?.weapon?.heldModelName || 'sword';
+  const heldModelName = attacker?.weapon?.heldModelName || attacker?.weapon?.weaponType || 'sword';
 
   // Support / Healing ability handling
   if (ability?.isSupport) {
@@ -448,6 +480,12 @@ export function calculateCombatForecast(attacker, defender, ability, board, acti
     elevationHitMod = -10;
   }
 
+  // Elemental / Fiery / Burning bonus (+18% bonus fire damage)
+  let elementalDmgMult = 1.0;
+  if (defender.status === 'burning' || attacker.weapon?.elementalPrefix === 'Fiery' || ability?.elementalPrefix === 'Fiery' || attacker.weapon?.statusProc === 'burning' || ability?.statusProc === 'burning') {
+    elementalDmgMult = 1.18;
+  }
+
   const isMagic = !!ability?.isMagic;
   const atkStat = isMagic
     ? (attacker.stats?.magicDamage || attacker.stats?.physicalDamage || 22)
@@ -477,13 +515,18 @@ export function calculateCombatForecast(attacker, defender, ability, board, acti
 
   const powerMult = ability?.powerMult || 1.0;
   let baseDamage = Math.max(6, (atkStat * 1.55 - defStat * 0.70)) * powerMult;
-  baseDamage = baseDamage * angleDmgMult * elevationDmgMult * lawDmgMult;
+  baseDamage = baseDamage * angleDmgMult * elevationDmgMult * lawDmgMult * elementalDmgMult;
+  if (attacker.weapon?.boostMult) {
+    baseDamage *= attacker.weapon.boostMult;
+  }
   const expectedDamage = Math.max(1, Math.round(baseDamage));
 
-  // Hit chance
+  // Hit chance (confused status gives -20% accuracy dizzy penalty)
+  const isConfused = attacker.status === 'confused';
+  const confusePenalty = isConfused ? 20 : 0;
   const atkAcc = attacker.stats?.accuracy || 80;
   const defDodge = defender.stats?.dodge || 15;
-  let hitChance = 75 + (atkAcc - defDodge) * 0.25 + angleHitMod + elevationHitMod;
+  let hitChance = 75 + (atkAcc - defDodge) * 0.25 + angleHitMod + elevationHitMod - confusePenalty;
   hitChance = Math.min(100, Math.max(15, Math.round(hitChance)));
 
   // Crit chance
@@ -547,6 +590,8 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
       attackerAnim: forecast.animationName,
       defenderAnim: 'Revived',
       defenderDead: false,
+      statusApplied: null,
+      lootDrop: null,
       forecast
     };
   }
@@ -566,6 +611,8 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
       attackerAnim: forecast.animationName,
       defenderAnim: 'Idle',
       defenderDead: false,
+      statusApplied: null,
+      lootDrop: null,
       forecast
     };
   }
@@ -594,17 +641,60 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     orbsEarned = rng.nextInt(30, 45);
   }
 
+  // If a 'sleeping' unit takes damage, wake them up (defender.status = null)
+  if (defender.status === 'sleeping' && damage > 0) {
+    defender.status = null;
+  }
+
   // Apply damage
   defender.hp = Math.max(0, (defender.hp ?? 100) - damage);
   defender.alive = defender.hp > 0;
   defender.isDead = !defender.alive;
 
+  // Status Proc Check:
+  // When an attack hits and defender survives (defender.hp > 0), check if ability or weapon has statusProc
+  // (35% proc chance on basic attacks, 65% on special skills)
+  let statusApplied = null;
+  if (defender.alive) {
+    const statusProc = ability?.statusProc || attacker?.weapon?.statusProc;
+    if (statusProc) {
+      const isSpecialSkill = !!(ability && (
+        (ability.costMp && ability.costMp > 0) ||
+        ability.isMagic ||
+        (ability.id && ability.id !== 'basic_attack' && (ability.powerMult || 1.0) > 1.0)
+      ));
+      const procChance = isSpecialSkill ? 65 : 35;
+      const procRoll = rng.nextInt(1, 100);
+      if (procRoll <= procChance) {
+        defender.status = statusProc;
+        defender.statusTurns = 1;
+        statusApplied = statusProc;
+        if (statusProc === 'frozen') {
+          // Frozen: ice-locked for 1 turn, -30 CT
+          defender.ct = Math.max(0, (defender.ct || 0) - 30);
+        }
+      }
+    }
+  }
+
+  // When defenderDead is true, generate lootDrop object
+  let lootDrop = null;
   if (!defender.alive) {
     defenderAnim = 'Bounced to Death';
     const grade = (defender.grade || defender.tierGrade || 'C').toUpperCase();
     const killBonusSchedule = { S: 250, A: 200, B: 150, C: 110, D: 85, E: 75, F: 75 };
     const killBonus = killBonusSchedule[grade] || 100;
     orbsEarned += killBonus;
+
+    const dropX = defender.x !== undefined ? defender.x : (defender.gridX ?? 0);
+    const dropZ = defender.z !== undefined ? defender.z : (defender.gridZ ?? 0);
+    const defSeed = defender.seed || 42;
+    lootDrop = {
+      x: dropX,
+      z: dropZ,
+      orbs: defender.isBoss ? 120 : 35,
+      item: generateFallbackItem(deriveSeed(defSeed, 777))
+    };
   }
 
   return {
@@ -617,6 +707,8 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     attackerAnim: forecast.animationName,
     defenderAnim,
     defenderDead: !defender.alive,
+    statusApplied,
+    lootDrop,
     forecast
   };
 }

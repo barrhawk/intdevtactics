@@ -242,6 +242,15 @@ export class TurnManager {
     this.turnCount++;
     this.activeLaw = this._getLawForTurn(this.turnCount);
 
+    // When a unit reaches 100 CT to start its turn, if frozen or sleeping, decrement statusTurns.
+    // If statusTurns <= 0, clear unit.status = null.
+    if (activeUnit.status === 'frozen' || activeUnit.status === 'sleeping') {
+      activeUnit.statusTurns = (activeUnit.statusTurns || 1) - 1;
+      if (activeUnit.statusTurns <= 0) {
+        activeUnit.status = null;
+      }
+    }
+
     return {
       activeUnit,
       ticksElapsed,
@@ -368,6 +377,18 @@ export class TurnManager {
    * Returns { moveTile, movePath, ability, targetUnit, endFacing, forecast }
    */
   computeTacticalAI(aiUnit, allUnits = [], board = null) {
+    // If unit is incapacitated by frozen or sleeping status, skip turn actions
+    if (aiUnit.status === 'frozen' || aiUnit.status === 'sleeping') {
+      return {
+        moveTile: { x: aiUnit.gridX, z: aiUnit.gridZ, elevation: aiUnit.elevation ?? 0 },
+        movePath: [],
+        ability: null,
+        targetUnit: null,
+        endFacing: aiUnit.facing || 'SE',
+        forecast: null
+      };
+    }
+
     const livingUnits = allUnits.filter(
       (u) => u && u.alive !== false && (u.hp === undefined || u.hp > 0)
     );
