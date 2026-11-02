@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createWaterSwell, createWaterRipples, sampleWaterField } from '@engine/debug/water-simulation';
 
 export const BOARD_SIZE = 10;
 export const TILE_SIZE = 24;
@@ -43,6 +44,9 @@ export class IsometricBoard {
 
     // Setup highlight overlay pools
     this._initHighlightOverlays();
+
+    // Setup FFT water swell, ripples, and surface mesh
+    this._initWaterSimulation(seed);
   }
 
   _createMaterials() {
@@ -101,11 +105,11 @@ export class IsometricBoard {
         let terrain = 'grass';
         let passable = true;
 
-        // 1. Shallow Crystal Stream (z = 4 and z = 5)
+        // 1. Shallow Crystal Stream (z = 4 and z = 5) - wadeable shallow water
         if (z === 4 || z === 5) {
           elevation = 0;
           terrain = 'water';
-          passable = false; // impassable water except at bridge
+          passable = true; // wadeable shallow water
         }
 
         // 2. Cobblestone Bridge spanning crystal stream (x = 4, 5 at z = 4, 5)
@@ -171,13 +175,17 @@ export class IsometricBoard {
         const worldZ = (z - (BOARD_SIZE - 1) / 2) * TILE_SIZE;
         const worldY = elevation * ELEVATION_STEP;
 
+        const isWater = terrain === 'water';
+        const moveCost = isWater ? 2 : 1;
+
         row.push({
           x,
           z,
           elevation,
           terrain,
           type: terrain,
-          isWater: terrain === 'water',
+          isWater,
+          moveCost,
           passable,
           worldX,
           worldY,
@@ -375,7 +383,7 @@ export class IsometricBoard {
   }
 
   /**
-   * Check if tile at (x, z) is passable and not water.
+   * Check if tile at (x, z) is passable.
    * @param {number} x
    * @param {number} z
    * @returns {boolean}
@@ -383,7 +391,7 @@ export class IsometricBoard {
   isWalkable(x, z) {
     const tile = this.getTile(x, z);
     if (!tile) return false;
-    return tile.passable !== false && !tile.isWater && tile.terrain !== 'water';
+    return tile.passable !== false;
   }
 
   /**
@@ -662,14 +670,154 @@ export class IsometricBoard {
     this._clearGroup(this.attackHighlightGroup);
   }
 
+  _initWaterSimulation(seed) {
+    this.waterSwell = createWaterSwell({
+      size: 32,
+      domain: 240,
+      windX: 1,
+      windZ: 0.3,
+      windSpeed: 10,
+      gravity: 98,
+      smallWave: 0.8,
+      choppiness: 0.8,
+      targetHeight: 1.2,
+      repeatPeriod: 20,
+      foamThreshold: 0.45,
+      foamStrength: 1.2,
+      seed: typeof seed === 'number' ? seed : 42
+    });
+
+    this.waterRipples = createWaterRipples({
+      size: 32,
+      domain: 240,
+      propagation: 0.45,
+      damping: 0.985,
+      sponge: 3
+    });
+
+    this.activeWaterRipples = [];
+
+    // Subdivided water surface plane over the crystal stream channel
+    // River spans X: [-120, 120] (width 240), Z: [-24, 24] (width 48), Y: 0.08
+    const riverGeo = new THREE.PlaneGeometry(240, 48, 48, 12);
+    riverGeo.rotateX(-Math.PI / 2);
+
+    this.waterSurfaceMaterial = new THREE.MeshStandardMaterial({
+      color: 0x06b6d4, // crystal cyan water
+      roughness: 0.1,
+      metalness: 0.35,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    this.waterSurfaceMesh = new THREE.Mesh(riverGeo, this.waterSurfaceMaterial);
+    this.waterSurfaceMesh.position.set(0, 0.08, 0);
+    this.waterSurfaceMesh.name = 'AnimatedWaterSurface';
+    this.boardGroup.add(this.waterSurfaceMesh);
+
+    this.waterBasePositions = riverGeo.attributes.position.array.slice();
+  }
+
   /**
-   * Update highlight animations (e.g. pulsing active unit gold tile).
+   * Spawns an expanding 3D cyan water ripple ring + steps the water ripple solver at (worldX, worldZ).
+   * @param {number} worldX
+   * @param {number} worldZ
+   * @param {number} [strength=1.0]
+   */
+  triggerWaterRipple(worldX, worldZ, strength = 1.0) {
+    if (this.waterRipples) {
+      this.waterRipples.displace(worldX, worldZ, -1.2 * strength);
+      this.waterRipples.settle(2.0, 1.5);
+    }
+
+    const ringGeo = new THREE.RingGeometry(0.8, 2.2, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.85 * Math.min(strength, 1.0),
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.position.set(worldX, 0.15, worldZ);
+    this.boardGroup.add(ringMesh);
+
+    const now = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    this.activeWaterRipples.push({
+      mesh: ringMesh,
+      startTime: now
+    });
+  }
+
+  /**
+   * Update highlight animations and FFT water swell & ripples.
    * @param {number} now
    */
   update(now) {
+    const nowSec = now || (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+
     if (this.activeUnitGroup.visible) {
-      const pulse = 0.45 + 0.35 * (Math.sin(now * 5.0) * 0.5 + 0.5);
+      const pulse = 0.45 + 0.35 * (Math.sin(nowSec * 5.0) * 0.5 + 0.5);
       this.activeUnitMaterial.opacity = pulse;
+    }
+
+    // Step FFT water swell and ripples solver
+    if (this.waterSwell) {
+      this.waterSwell.update(nowSec);
+    }
+    if (this.waterRipples) {
+      this.waterRipples.settle(1.0, 2.0);
+      this.waterRipples.step();
+    }
+
+    // Deform water surface mesh with live wave heights
+    if (this.waterSurfaceMesh && this.waterBasePositions && this.waterSwell) {
+      const pos = this.waterSurfaceMesh.geometry.attributes.position;
+      const array = pos.array;
+      const base = this.waterBasePositions;
+      const swell = this.waterSwell;
+      const ripples = this.waterRipples;
+
+      for (let i = 0; i < array.length; i += 3) {
+        const wx = base[i];
+        const wz = base[i + 2];
+        const u = (wx + 120) / 240;
+        const v = (wz + 120) / 240;
+        let h = sampleWaterField(swell.heightDisplacement, swell.size, u, v, 0);
+        if (ripples) {
+          h += sampleWaterField(ripples.field, ripples.size, u, v, 0);
+        }
+        array[i + 1] = base[i + 1] + h * 0.55;
+      }
+      pos.needsUpdate = true;
+      this.waterSurfaceMesh.geometry.computeVertexNormals();
+
+      // Living crystal shimmer
+      if (this.waterSurfaceMaterial) {
+        this.waterSurfaceMaterial.opacity = 0.82 + 0.08 * Math.sin(nowSec * 2.5);
+      }
+    }
+
+    // Animate expanding 3D water ripple rings
+    if (this.activeWaterRipples && this.activeWaterRipples.length > 0) {
+      const RIPPLE_DURATION = 0.75;
+      for (let i = this.activeWaterRipples.length - 1; i >= 0; i--) {
+        const r = this.activeWaterRipples[i];
+        const elapsed = nowSec - r.startTime;
+        const progress = Math.min(1.0, elapsed / RIPPLE_DURATION);
+        const scale = 1.0 + progress * 3.5;
+        r.mesh.scale.set(scale, scale, 1);
+        r.mesh.material.opacity = Math.max(0, (1 - progress) * 0.85);
+        if (progress >= 1.0) {
+          this.boardGroup.remove(r.mesh);
+          r.mesh.geometry.dispose();
+          r.mesh.material.dispose();
+          this.activeWaterRipples.splice(i, 1);
+        }
+      }
     }
   }
 
@@ -720,6 +868,30 @@ export class IsometricBoard {
     if (this.supportMaterial) this.supportMaterial.dispose();
     if (this.activeUnitMaterial) this.activeUnitMaterial.dispose();
     if (this.activeUnitBorderMaterial) this.activeUnitBorderMaterial.dispose();
+
+    if (this.activeWaterRipples) {
+      for (const r of this.activeWaterRipples) {
+        if (r.mesh) {
+          this.boardGroup.remove(r.mesh);
+          r.mesh.geometry?.dispose();
+          r.mesh.material?.dispose();
+        }
+      }
+      this.activeWaterRipples = [];
+    }
+
+    if (this.waterSurfaceMesh) {
+      this.boardGroup.remove(this.waterSurfaceMesh);
+      this.waterSurfaceMesh.geometry?.dispose();
+      this.waterSurfaceMesh = null;
+    }
+    if (this.waterSurfaceMaterial) {
+      this.waterSurfaceMaterial.dispose();
+      this.waterSurfaceMaterial = null;
+    }
+    this.waterBasePositions = null;
+    this.waterSwell = null;
+    this.waterRipples = null;
 
     this.interactiveMeshes = [];
     this.tiles = [];

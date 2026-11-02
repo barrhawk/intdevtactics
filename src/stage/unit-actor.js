@@ -4,6 +4,39 @@ import { createTacticsSprite, prepareSheet, SCALE_X, SCALE_Y } from '../tactics-
 import { readSetItems } from '../three-isometric-engine/weapons/set-items.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
+import { BOW_SPEC, createBow, resetBow, bendAt, simulateShot } from '@engine/weapons/bow';
+import { createBowMesh, createArrowGeometries, createArrowMesh, syncBowMesh } from '@engine/weapons/bow-mesh';
+import { solveArc } from '@engine/weapons/ballistics';
+import { defaultGravity, spawnFadeMs, despawnFadeMs } from '@engine/constants/physics';
+import { CLOTH_BAG_SPEC, createClothBag, resetClothBag, whipClothBag, stepClothBag } from '@engine/weapons/cloth-bag';
+import { createClothBagResources, createClothBagMesh, syncClothBagMesh } from '@engine/weapons/cloth-bag-mesh';
+import { ITEM_FACES, applyItemFaces as _applyItemFaces, createItemFinishBake } from '@engine/weapons/item-finish';
+import { patchGroupSpawnMaterials, updateSpawnProgress, computeSpawnProgress } from '@engine/meshes/spawn-effect';
+
+export { BOW_SPEC, createBow, bendAt, simulateShot, createBowMesh, createArrowGeometries, createArrowMesh, solveArc };
+export { CLOTH_BAG_SPEC, createClothBag, resetClothBag, whipClothBag, stepClothBag, createClothBagMesh };
+export { ITEM_FACES, createItemFinishBake };
+
+/**
+ * Universal wrapper for applyItemFaces supporting both:
+ * applyItemFaces(material, bake, itemName)
+ * and applyItemFaces(material, face, { plate, inside })
+ */
+export function applyItemFaces(material, bakeOrFace, nameOrTextures) {
+  if (bakeOrFace && (bakeOrFace.plate || bakeOrFace.bake) && typeof nameOrTextures === 'string') {
+    const name = nameOrTextures.toLowerCase();
+    const bake = bakeOrFace;
+    const face = ITEM_FACES[name];
+    if (!face) return material;
+    const textures = {
+      plate: { value: bake.plate },
+      inside: { value: name === 'tome' ? bake.pages : bake.back }
+    };
+    return _applyItemFaces(material, face, textures);
+  }
+  return _applyItemFaces(material, bakeOrFace, nameOrTextures);
+}
+
 export const FACING_NAME_TO_INDEX = {
   E: 0,
   SE: 1,
@@ -253,6 +286,11 @@ export class StageUnitManager {
     this.crimsonObsidianMaterial = null;
     this.mythrilMaterial = null; // backward compatibility alias
 
+    // GPU-baked item finish for hammered shield and spellbook pages
+    this.itemFinishBake = null;
+    this.clothBagResources = null;
+    this.lootBags = new Map(); // "${x},${z}" -> { mesh, x, z, data }
+
     this.loaded = false;
   }
 
@@ -336,6 +374,27 @@ export class StageUnitManager {
     });
     this.marbleMesh = new THREE.Mesh(marbleGeo, marbleMat);
 
+    // 7. Initialize GPU-baked item finish (hammered shield rivets & spellbook pages)
+    if (renderer) {
+      try {
+        this.itemFinishBake = createItemFinishBake(renderer);
+        this.itemFinishBake.bake();
+      } catch (err) {
+        console.warn('[StageUnitManager] createItemFinishBake fallback:', err);
+        this.itemFinishBake = null;
+      }
+    } else {
+      this.itemFinishBake = null;
+    }
+
+    // 8. Shared resources for XPBD physics cloth bag
+    try {
+      this.clothBagResources = createClothBagResources(CLOTH_BAG_SPEC);
+    } catch (err) {
+      console.warn('[StageUnitManager] createClothBagResources fallback:', err);
+      this.clothBagResources = null;
+    }
+
     this.loaded = true;
     return this;
   }
@@ -413,38 +472,138 @@ export class StageUnitManager {
   }
 
   /**
-   * Instantiate a 3D weapon mesh from cached models with an isolated cloned material.
-   * Gives Azure Clan gleaming Azure-Mythril/Gold tint, and Crimson Order Blood-Obsidian tint.
+   * Helper to generate a 5-tier metallic standard material:
+   * 'bronze', 'iron', 'mythril', 'gold', 'adamantite'.
+   * @param {'azure'|'crimson'|'blue'|'red'} [team='azure']
+   * @param {'bronze'|'iron'|'mythril'|'gold'|'adamantite'} [finishTier='mythril']
+   * @param {boolean} [isWeapon=false]
+   * @returns {THREE.MeshStandardMaterial}
+   */
+  _createTierMaterial(team = 'azure', finishTier = 'mythril', isWeapon = false) {
+    const isCrimson = team === 'crimson' || team === 'red';
+    const tier = (finishTier || 'mythril').toLowerCase();
+
+    let color = isCrimson ? 0x991b1b : 0x93c5fd;
+    let metalness = 0.88;
+    let roughness = 0.20;
+    let emissive = 0x000000;
+    let emissiveIntensity = 0;
+
+    switch (tier) {
+      case 'bronze':
+        color = 0xcd7f32;
+        metalness = 0.75;
+        roughness = 0.35;
+        break;
+      case 'iron':
+        color = 0x64748b;
+        metalness = 0.85;
+        roughness = 0.28;
+        break;
+      case 'mythril':
+        color = isCrimson ? 0x991b1b : 0x93c5fd;
+        metalness = isCrimson ? 0.92 : 0.88;
+        roughness = isCrimson ? 0.16 : 0.20;
+        break;
+      case 'gold':
+        color = 0xf59e0b;
+        metalness = 0.95;
+        roughness = 0.12;
+        emissive = 0x78350f;
+        emissiveIntensity = 0.35;
+        break;
+      case 'adamantite':
+        color = 0x06b6d4;
+        metalness = 0.98;
+        roughness = 0.08;
+        emissive = 0x0891b2;
+        emissiveIntensity = 0.45;
+        break;
+      default:
+        color = isCrimson ? 0x991b1b : 0x93c5fd;
+        metalness = isCrimson ? 0.92 : 0.88;
+        roughness = isCrimson ? 0.16 : 0.20;
+        break;
+    }
+
+    return new THREE.MeshStandardMaterial({
+      color,
+      metalness,
+      roughness,
+      emissive,
+      emissiveIntensity,
+      vertexColors: isWeapon,
+      envMap: this.envMap
+    });
+  }
+
+  /**
+   * Instantiate a 3D weapon mesh from cached models with 5 finish tiers:
+   * 'bronze', 'iron', 'mythril', 'gold', 'adamantite'.
+   * Supports:
+   * - 2400Hz flexible Bow ('bow')
+   * - XPBD physics cloth bag flail ('cloth_bag')
+   * - GPU-baked hammered shield and spellbook pages ('shield', 'tome')
+   * - Thrown marble ('marble', 'stone')
+   * - Set items ('sword', 'katana', 'spear', 'rifle', 'harp')
    * @param {string} name
    * @param {'azure'|'crimson'|'blue'|'red'} [team='azure']
-   * @returns {THREE.Mesh|null}
+   * @param {'bronze'|'iron'|'mythril'|'gold'|'adamantite'} [finishTier='mythril']
+   * @returns {THREE.Mesh|THREE.Group|null}
    */
-  createWeaponMesh(name, team = 'azure') {
+  createWeaponMesh(name, team = 'azure', finishTier = 'mythril') {
     if (!name) return null;
     const lower = name.toLowerCase();
+
+    // 1. Thrown Stone / Marble
     if (lower === 'marble' || lower === 'stone') {
       if (!this.marbleMesh) return null;
       const mesh = new THREE.Mesh(this.marbleMesh.geometry.clone(), this.marbleMesh.material.clone());
       mesh.name = `WeaponMesh_marble_${team}`;
       return mesh;
     }
+
+    // 2. 2400Hz Flexible Physics Bow
+    if (lower === 'bow') {
+      const bow = createBow(BOW_SPEC);
+      const staveMat = this._createTierMaterial(team, finishTier, true);
+      const stringMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+      const bowMesh = createBowMesh(bow, { stave: staveMat, string: stringMat });
+      bowMesh.userData.bow = bow;
+      bowMesh.name = `WeaponMesh_bow_${team}_${finishTier}`;
+      return bowMesh;
+    }
+
+    // 3. XPBD Physics Cloth Bag Flail
+    if (lower === 'cloth_bag' || lower === 'bag' || lower === 'clothbag') {
+      const bag = createClothBag(CLOTH_BAG_SPEC);
+      resetClothBag(bag, 0, 0);
+      this.clothBagResources = this.clothBagResources || createClothBagResources(CLOTH_BAG_SPEC);
+      const bagMat = this._createTierMaterial(team, finishTier, true);
+      const group = new THREE.Group();
+      const bagMesh = createClothBagMesh(bag, this.clothBagResources, bagMat, group);
+      group.userData.clothBag = { bag, bagMesh };
+      group.name = `WeaponMesh_cloth_bag_${team}_${finishTier}`;
+      return group;
+    }
+
+    // 4. Set Item Models
     const geo = this.models[lower] || this.models.sword;
     if (!geo) return null;
 
-    const isCrimson = team === 'crimson' || team === 'red';
-    const baseMat = isCrimson ? this.crimsonObsidianMaterial : this.azureMythrilMaterial;
+    const mat = this._createTierMaterial(team, finishTier, true);
 
-    // Clone material per weapon mesh to eliminate D-13 & D-16 mutation bugs
-    const mat = baseMat
-      ? baseMat.clone()
-      : new THREE.MeshStandardMaterial({
-          color: isCrimson ? 0x991b1b : 0x93c5fd,
-          metalness: 0.9,
-          roughness: 0.18
-        });
+    // Apply GPU-baked hammered finish for shield and spellbook pages for tome
+    if (this.itemFinishBake && (lower === 'shield' || lower === 'tome')) {
+      try {
+        applyItemFaces(mat, this.itemFinishBake, lower);
+      } catch (err) {
+        console.warn('[StageUnitManager] applyItemFaces warning:', err);
+      }
+    }
 
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.name = `WeaponMesh_${lower}_${team}`;
+    mesh.name = `WeaponMesh_${lower}_${team}_${finishTier}`;
     return mesh;
   }
 
@@ -680,10 +839,25 @@ export class StageUnitManager {
       });
       sprite.player.facing = facingIdx;
 
-      // Stance position at worldPos.x, worldPos.y + sprite.standHeight, worldPos.z
+      // Check if unit is spawning in water (wadeable shallow stream)
+      const tile = board?.getTile?.(unit.x, unit.z);
+      const isInWater = (tile?.terrain === 'water' || tile?.isWater) && unit.status !== 'floating';
+      const waterOffset = isInWater ? -3.5 : 0;
+
+      // Stance position at worldPos.x, worldPos.y + sprite.standHeight + waterOffset, worldPos.z
       const worldPos = board.tileToWorld(unit.x, unit.z, unit.elevation);
-      sprite.group.position.set(worldPos.x, worldPos.y + sprite.standHeight, worldPos.z);
+      sprite.group.position.set(worldPos.x, worldPos.y + sprite.standHeight + waterOffset, worldPos.z);
+      if (isInWater) {
+        sprite.player.water = true;
+        board?.triggerWaterRipple?.(worldPos.x, worldPos.z, 1.0);
+      } else {
+        sprite.player.water = false;
+      }
       this.scene.add(sprite.group);
+
+      // PS1 / FFTA 4x4 Bayer Dithered Spawn Materialization
+      const spawnRefs = patchGroupSpawnMaterials(sprite.group);
+      updateSpawnProgress(spawnRefs, 0.0);
 
       // Under-foot grounded team indicator ring
       const ringColor = isBlue ? 0x38bdf8 : 0xf43f5e;
@@ -734,7 +908,25 @@ export class StageUnitManager {
         carriedMesh: null,
         hitboxMesh,
         groundY: worldPos.y,
+        inWater: isInWater,
+        spawnRefs,
+        spawnStartTime: typeof performance !== 'undefined' ? performance.now() / 1000 : 0,
+        spawnProgress: 0.0,
+        statusRingMesh: null,
         _materialProxy: null
+      };
+
+      // Wrap sprite.play so wading sprites keep player.water = true during animations
+      const origPlay = sprite.play.bind(sprite);
+      sprite.play = (anim, at, opts = {}) => {
+        if (actor.inWater && actor.unit.status !== 'floating') {
+          opts = { ...opts, water: true };
+        }
+        const res = origPlay(anim, at, opts);
+        if (actor.inWater && actor.unit.status !== 'floating') {
+          actor.sprite.player.water = true;
+        }
+        return res;
       };
 
       // Alias sprite.mesh to sprite.group and support actor.sprite.mesh.material.opacity = 0.28
@@ -805,6 +997,19 @@ export class StageUnitManager {
       const nextElev = next.elevation !== undefined ? next.elevation : (board.getTile(next.x, next.z)?.elevation ?? 0);
       const dElev = nextElev - prevElev;
 
+      const nextTile = board.getTile(next.x, next.z);
+      const prevTile = board.getTile(prev.x, prev.z);
+      const isWaterStep = (nextTile?.terrain === 'water' || nextTile?.isWater) && actor.unit.status !== 'floating';
+      const prevInWater = (prevTile?.terrain === 'water' || prevTile?.isWater) && actor.unit.status !== 'floating';
+
+      actor.inWater = isWaterStep;
+      if (isWaterStep) {
+        actor.sprite.player.water = true;
+        board?.triggerWaterRipple?.(targetWorld.x, targetWorld.z, 1.0);
+      } else {
+        actor.sprite.player.water = false;
+      }
+
       let animName = 'Walk Fast';
       if (dElev > 0) animName = 'Jump Up';
       else if (dElev < 0) animName = 'Jump Down';
@@ -844,8 +1049,11 @@ export class StageUnitManager {
             curY += Math.sin(s * Math.PI) * 6;
           }
 
-          // Sprite follows parabolic arc
-          actor.sprite.group.position.set(curX, curY + actor.sprite.standHeight, curZ);
+          // Sprite follows movement with water wade vertical offset (-3.5 when wading)
+          const startWaterOffset = prevInWater ? -3.5 : 0;
+          const targetWaterOffset = isWaterStep ? -3.5 : 0;
+          const currentWaterOffset = startWaterOffset + (targetWaterOffset - startWaterOffset) * s;
+          actor.sprite.group.position.set(curX, curY + actor.sprite.standHeight + currentWaterOffset, curZ);
 
           // CRITICAL FIX 5 (D-14): Keep ring grounded on floor surface!
           const groundY = startWorld.y + (targetWorld.y - startWorld.y) * s;
@@ -859,7 +1067,8 @@ export class StageUnitManager {
           if (s < 1) {
             nextFrame(tick);
           } else {
-            actor.sprite.group.position.set(targetWorld.x, targetWorld.y + actor.sprite.standHeight, targetWorld.z);
+            const finalWaterOffset = isWaterStep ? -3.5 : 0;
+            actor.sprite.group.position.set(targetWorld.x, targetWorld.y + actor.sprite.standHeight + finalWaterOffset, targetWorld.z);
             actor.groundY = targetWorld.y;
             actor.ring.position.set(targetWorld.x, targetWorld.y + 0.12, targetWorld.z);
 
@@ -878,6 +1087,12 @@ export class StageUnitManager {
         };
         nextFrame(tick);
       });
+
+      // 3D Loot Bag pickup if stepping on dropped pouch tile
+      const lootKey = `${next.x},${next.z}`;
+      if (this.lootBags && this.lootBags.has(lootKey)) {
+        await this.pickupLootBag(next.x, next.z, actor, getNow);
+      }
     }
 
     // Finished movement: return to 'Idle' (or 'Critical' if HP < 25%)
@@ -974,20 +1189,81 @@ export class StageUnitManager {
     defenderPos.y += 10; // Chest target
 
     if (isRanged) {
+      // 2400Hz Flexible Bow limb bending during draw phase
+      if (weaponMesh && weaponMesh.userData?.bow) {
+        const bow = weaponMesh.userData.bow;
+        const { phi } = bendAt(bow, BOW_SPEC.drawLength);
+        bow.phi = phi;
+        syncBowMesh(weaponMesh, bow);
+      }
+
       await this._sleep(150);
 
-      // Spawn flying projectile
+      // Spawn flying projectile (3D flexible bow arrow, gun bullet, spell sphere, or stone)
       await new Promise((resolve) => {
+        if (animName.startsWith('Bow') || holdItemName === 'bow') {
+          const dx = Math.hypot(defenderPos.x - attackerPos.x, defenderPos.z - attackerPos.z);
+          const dy = defenderPos.y - attackerPos.y;
+          const arrowSpeed = 190;
+          const solved = solveArc(dx, dy, arrowSpeed);
+          const flightDuration = solved ? solved.flightS : 0.32;
+          const vh = solved ? solved.vh : (dx / flightDuration);
+          const vv = solved ? solved.vv : ((dy - 0.5 * defaultGravity * flightDuration * flightDuration) / flightDuration);
+
+          const arrowGeos = createArrowGeometries(BOW_SPEC.arrowLength);
+          const arrowMats = {
+            shaft: new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.6 }),
+            head: new THREE.MeshStandardMaterial({ color: 0xd4e0ed, metalness: 0.8, roughness: 0.2 }),
+            vanes: new THREE.MeshBasicMaterial({ color: 0xdc2626, side: THREE.DoubleSide })
+          };
+          const arrowMesh = createArrowMesh(arrowGeos, arrowMats);
+          arrowMesh.scale.setScalar(0.72);
+          this.scene.add(arrowMesh);
+
+          const flightStart = getNow();
+          const animArrow = () => {
+            const elapsed = getNow() - flightStart;
+            const t = Math.min(elapsed, flightDuration);
+            const s = flightDuration > 0 ? t / flightDuration : 1;
+            const px = attackerPos.x + (defenderPos.x - attackerPos.x) * s;
+            const pz = attackerPos.z + (defenderPos.z - attackerPos.z) * s;
+            const py = attackerPos.y + vv * t + 0.5 * defaultGravity * t * t;
+
+            const curVy = vv + defaultGravity * t;
+            const dirX = dx > 0 ? (defenderPos.x - attackerPos.x) / dx : 0;
+            const dirZ = dx > 0 ? (defenderPos.z - attackerPos.z) / dx : 0;
+            const curVx = dirX * vh;
+            const curVz = dirZ * vh;
+
+            arrowMesh.position.set(px, py, pz);
+            arrowMesh.lookAt(px + curVx, py + curVy, pz + curVz);
+
+            if (elapsed < flightDuration) {
+              nextFrame(animArrow);
+            } else {
+              this.scene.remove(arrowMesh);
+              arrowGeos.shaft.dispose();
+              arrowGeos.head.dispose();
+              arrowGeos.vanes.dispose();
+              arrowMats.shaft.dispose();
+              arrowMats.head.dispose();
+              arrowMats.vanes.dispose();
+              if (weaponMesh && weaponMesh.userData?.bow) {
+                resetBow(weaponMesh.userData.bow);
+                syncBowMesh(weaponMesh, weaponMesh.userData.bow);
+              }
+              resolve();
+            }
+          };
+          nextFrame(animArrow);
+          return;
+        }
+
         let projMesh;
         if (animName.startsWith('Gun')) {
           const geo = new THREE.CylinderGeometry(0.3, 0.3, 12, 6);
           geo.rotateZ(Math.PI / 2);
           const mat = new THREE.MeshBasicMaterial({ color: 0xfff0c8 });
-          projMesh = new THREE.Mesh(geo, mat);
-        } else if (animName.startsWith('Bow')) {
-          const geo = new THREE.CylinderGeometry(0.25, 0.25, 8, 6);
-          geo.rotateZ(Math.PI / 2);
-          const mat = new THREE.MeshBasicMaterial({ color: 0x94a3b8 });
           projMesh = new THREE.Mesh(geo, mat);
         } else if (animName.includes('Casting')) {
           const geo = new THREE.SphereGeometry(2.5, 12, 12);
@@ -1031,6 +1307,12 @@ export class StageUnitManager {
         nextFrame(animProj);
       });
     } else {
+      // Step XPBD physics for cloth bag swing if swinging flail
+      if (weaponMesh && weaponMesh.userData?.clothBag) {
+        const { bag } = weaponMesh.userData.clothBag;
+        whipClothBag(bag, defenderPos.x, defenderPos.y, 0.3);
+        stepClothBag(bag, attackerPos.x, attackerPos.y);
+      }
       await this._sleep(300);
     }
 
@@ -1111,6 +1393,13 @@ export class StageUnitManager {
        defenderActor.unit.isDead);
 
     if (isDead) {
+      if (board && typeof this.spawnLootBag === 'function') {
+        this.spawnLootBag(defenderActor.unit.x, defenderActor.unit.z, board, {
+          orbs: 50,
+          item: 'Set Relic',
+          ...outcome?.loot
+        });
+      }
       await this.playDefeat(defenderActor.unit.id);
     } else {
       if (defenderActor.idleWeaponMesh) {
@@ -1207,6 +1496,259 @@ export class StageUnitManager {
   }
 
   /**
+   * Spawns a 3D golden-tied Loot Pouch mesh on tile (x, z) that gently bobs and sparkles on the surface.
+   * @param {number} x
+   * @param {number} z
+   * @param {IsometricBoard} board
+   * @param {Object} [lootData]
+   * @returns {Object}
+   */
+  spawnLootBag(x, z, board, lootData) {
+    const key = `${x},${z}`;
+    if (this.lootBags.has(key)) return this.lootBags.get(key);
+
+    const worldPos = board ? board.tileToWorld(x, z) : new THREE.Vector3(0, 0, 0);
+    const group = new THREE.Group();
+    group.name = `LootBag_${key}`;
+
+    // 1. Rich velvet bag body
+    const sackGeo = new THREE.SphereGeometry(2.4, 16, 16);
+    sackGeo.scale(1.0, 1.25, 1.0);
+    const sackMat = new THREE.MeshStandardMaterial({
+      color: 0x991b1b, // rich blood-crimson velvet
+      roughness: 0.65,
+      metalness: 0.15,
+      envMap: this.envMap
+    });
+    const sack = new THREE.Mesh(sackGeo, sackMat);
+    sack.position.y = 2.4;
+    group.add(sack);
+
+    // 2. Gleaming golden cord / ribbon tie ring
+    const tieGeo = new THREE.TorusGeometry(1.4, 0.35, 8, 16);
+    tieGeo.rotateX(Math.PI / 2);
+    const tieMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      metalness: 0.92,
+      roughness: 0.12,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.5,
+      envMap: this.envMap
+    });
+    const tie = new THREE.Mesh(tieGeo, tieMat);
+    tie.position.y = 4.2;
+    group.add(tie);
+
+    // 3. Top sack ruffle
+    const ruffleGeo = new THREE.ConeGeometry(1.6, 1.4, 8, 1, true);
+    ruffleGeo.rotateX(Math.PI);
+    const ruffle = new THREE.Mesh(ruffleGeo, sackMat);
+    ruffle.position.y = 5.0;
+    group.add(ruffle);
+
+    // 4. Sparkling golden gem sigil
+    const sparkleGeo = new THREE.OctahedronGeometry(0.85, 0);
+    const sparkleMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      wireframe: true
+    });
+    const sparkle = new THREE.Mesh(sparkleGeo, sparkleMat);
+    sparkle.position.y = 6.4;
+    group.add(sparkle);
+
+    group.position.set(worldPos.x, worldPos.y, worldPos.z);
+    this.scene.add(group);
+
+    const entry = {
+      mesh: group,
+      x,
+      z,
+      data: lootData || { orbs: 50, item: 'Loot Pouch' },
+      sparkle,
+      baseY: worldPos.y
+    };
+    this.lootBags.set(key, entry);
+    return entry;
+  }
+
+  /**
+   * Unit picks up a dropped loot pouch at (x, z):
+   * plays 'Found Item' or 'Chest Pickup' for 380ms, removes and disposes the pouch mesh,
+   * and returns lootData.
+   * @param {number} x
+   * @param {number} z
+   * @param {string|number|Object} unitOrId
+   * @param {Function} [nowSecGetter]
+   * @returns {Promise<Object|null>}
+   */
+  async pickupLootBag(x, z, unitOrId, nowSecGetter) {
+    const key = `${x},${z}`;
+    const entry = this.lootBags.get(key);
+    if (!entry) return null;
+
+    const actor = this._getActor(unitOrId);
+    const getNow = typeof nowSecGetter === 'function' ? nowSecGetter : () => performance.now() / 1000;
+
+    if (actor && actor.sprite) {
+      try {
+        actor.sprite.play('Found Item', getNow());
+      } catch {
+        try {
+          actor.sprite.play('Chest Pickup', getNow());
+        } catch {}
+      }
+    }
+
+    await this._sleep(380);
+
+    if (actor && actor.sprite && !actor.unit.isDead) {
+      const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
+      const maxHp = actor.unit.maxHp ?? 100;
+      const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+      actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
+    }
+
+    if (entry.mesh) {
+      this.scene.remove(entry.mesh);
+      entry.mesh.traverse((c) => {
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) c.material.dispose();
+      });
+    }
+    this.lootBags.delete(key);
+    return entry.data;
+  }
+
+  /**
+   * Applies tactical RPG status to a unit:
+   * 'frozen' -> plays 'Frozen' + icy blue tint ring
+   * 'sleeping' -> plays 'Sleeping'
+   * 'confused' -> plays 'Confused'
+   * 'floating' -> plays 'Float' (actor.sprite.player.water = false, elevated +5 units)
+   * null -> restores 'Idle' animation (and proper water status/stance)
+   * @param {string|number|Object} unitOrId
+   * @param {string|null} status
+   */
+  setUnitStatus(unitOrId, status) {
+    const actor = this._getActor(unitOrId);
+    if (!actor) return;
+
+    actor.unit.status = status;
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+    const stat = status ? String(status).toLowerCase() : null;
+
+    // Clean up previous status ring if any
+    if (actor.statusRingMesh) {
+      this.scene.remove(actor.statusRingMesh);
+      if (actor.statusRingMesh.geometry) actor.statusRingMesh.geometry.dispose();
+      if (actor.statusRingMesh.material) actor.statusRingMesh.material.dispose();
+      actor.statusRingMesh = null;
+    }
+
+    if (stat === 'frozen') {
+      actor.sprite.play('Frozen', getNow());
+      // Icy blue tint ring around unit feet
+      const iceGeo = new THREE.RingGeometry(6.2, 9.8, 16);
+      const iceMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+      const iceMesh = new THREE.Mesh(iceGeo, iceMat);
+      iceMesh.rotation.x = -Math.PI / 2;
+      iceMesh.position.set(actor.sprite.group.position.x, actor.groundY + 0.2, actor.sprite.group.position.z);
+      this.scene.add(iceMesh);
+      actor.statusRingMesh = iceMesh;
+    } else if (stat === 'sleeping') {
+      actor.sprite.play('Sleeping', getNow());
+    } else if (stat === 'confused') {
+      actor.sprite.play('Confused', getNow());
+    } else if (stat === 'floating') {
+      actor.sprite.play('Float', getNow());
+      actor.sprite.player.water = false;
+      // Elevate unit +5 units in the air
+      actor.sprite.group.position.y = actor.groundY + actor.sprite.standHeight + 5;
+    } else {
+      // null / cleared: restore Idle animation and proper water stance
+      if (actor.inWater) {
+        actor.sprite.player.water = true;
+        actor.sprite.group.position.y = actor.groundY + actor.sprite.standHeight - 3.5;
+      } else {
+        actor.sprite.player.water = false;
+        actor.sprite.group.position.y = actor.groundY + actor.sprite.standHeight;
+      }
+      const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
+      const maxHp = actor.unit.maxHp ?? 100;
+      const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+      actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
+    }
+  }
+
+  /**
+   * Smooth PS1 / FFTA Bayer dithered teleport effect between two positions.
+   * @param {string|number|Object} unitOrId
+   * @param {{ x: number, y?: number, z: number }|THREE.Vector3} fromPos
+   * @param {{ x: number, y?: number, z: number }|THREE.Vector3} toPos
+   */
+  async playTeleport(unitOrId, fromPos, toPos) {
+    const actor = this._getActor(unitOrId);
+    if (!actor) return;
+
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+    const nextFrame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+
+    const refs = patchGroupSpawnMaterials(actor.sprite.group);
+
+    // 1. Dither fade out at fromPos (progress 1.0 -> 0.0)
+    const fadeOutDuration = 0.25;
+    const startOut = getNow();
+    await new Promise((resolve) => {
+      const tickOut = () => {
+        const elapsed = getNow() - startOut;
+        const p = Math.max(0.0, 1.0 - elapsed / fadeOutDuration);
+        updateSpawnProgress(refs, p);
+        if (elapsed < fadeOutDuration) {
+          nextFrame(tickOut);
+        } else {
+          updateSpawnProgress(refs, 0.0);
+          resolve();
+        }
+      };
+      nextFrame(tickOut);
+    });
+
+    // 2. Teleport position to toPos
+    const tx = toPos.x ?? toPos.worldX ?? 0;
+    const ty = toPos.y ?? toPos.worldY ?? 0;
+    const tz = toPos.z ?? toPos.worldZ ?? 0;
+    actor.groundY = ty;
+    const waterOffset = actor.inWater && actor.unit.status !== 'floating' ? -3.5 : 0;
+    actor.sprite.group.position.set(tx, ty + actor.sprite.standHeight + waterOffset, tz);
+    if (actor.ring) actor.ring.position.set(tx, ty + 0.12, tz);
+    if (actor.hitboxMesh) actor.hitboxMesh.position.set(tx, ty + 13, tz);
+
+    // 3. Dither fade in at toPos (progress 0.0 -> 1.0)
+    const fadeInDuration = 0.25;
+    const startIn = getNow();
+    await new Promise((resolve) => {
+      const tickIn = () => {
+        const elapsed = getNow() - startIn;
+        const p = Math.min(1.0, elapsed / fadeInDuration);
+        updateSpawnProgress(refs, p);
+        if (elapsed < fadeInDuration) {
+          nextFrame(tickIn);
+        } else {
+          updateSpawnProgress(refs, 1.0);
+          resolve();
+        }
+      };
+      nextFrame(tickIn);
+    });
+  }
+
+  /**
    * Set opacity of all sprite mesh planes on an actor.
    * @param {Object} actor
    * @param {number} opacity
@@ -1292,6 +1834,21 @@ export class StageUnitManager {
         actor.sprite.update(nowSec, cam);
       }
 
+      // PS1 / FFTA 4x4 Bayer dither spawn progress update
+      if (actor.spawnRefs && actor.spawnProgress < 1.0) {
+        const p = Math.min(1.0, (nowSec - actor.spawnStartTime) / (spawnFadeMs / 1000));
+        updateSpawnProgress(actor.spawnRefs, p);
+        actor.spawnProgress = p;
+        if (p >= 1.0) {
+          actor.spawnRefs = null;
+        }
+      }
+
+      // Rotate status aura ring if active
+      if (actor.statusRingMesh) {
+        actor.statusRingMesh.rotation.z += dt * 0.8;
+      }
+
       // Grounded team indicator ring
       if (actor.ring && actor.sprite?.group) {
         const gy = actor.groundY !== undefined
@@ -1369,6 +1926,21 @@ export class StageUnitManager {
         this.hitBursts.splice(i, 1);
       }
     }
+
+    // 3. Animate 3D dropped loot bags (bobbing & sparkles)
+    if (this.lootBags) {
+      for (const loot of this.lootBags.values()) {
+        if (loot.mesh) {
+          const bob = Math.sin(nowSec * 3.5 + loot.x * 2 + loot.z) * 0.7;
+          loot.mesh.position.y = loot.baseY + bob;
+          loot.mesh.rotation.y = nowSec * 1.5;
+          if (loot.sparkle) {
+            loot.sparkle.rotation.x = nowSec * 2.5;
+            loot.sparkle.rotation.z = nowSec * 2.0;
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -1394,9 +1966,11 @@ export class StageUnitManager {
   _determineUnitWeaponName(unit) {
     if (unit.heldModelName) return unit.heldModelName.toLowerCase();
     const searchStr = `${unit.weapon?.modelName || ''} ${unit.weapon?.type || ''} ${unit.weapon?.name || ''} ${unit.className || ''}`.toLowerCase();
+    if (searchStr.includes('bow') || searchStr.includes('archer')) return 'bow';
+    if (searchStr.includes('cloth_bag') || searchStr.includes('cloth bag') || searchStr.includes('bag') || searchStr.includes('flail')) return 'cloth_bag';
     if (searchStr.includes('katana') || searchStr.includes('samurai') || searchStr.includes('ninja') || searchStr.includes('blade')) return 'katana';
     if (searchStr.includes('spear') || searchStr.includes('dragoon') || searchStr.includes('lance') || searchStr.includes('halberd')) return 'spear';
-    if (searchStr.includes('rifle') || searchStr.includes('gun') || searchStr.includes('bow') || searchStr.includes('archer') || searchStr.includes('sniper') || searchStr.includes('deadeye')) return 'rifle';
+    if (searchStr.includes('rifle') || searchStr.includes('gun') || searchStr.includes('sniper') || searchStr.includes('deadeye')) return 'rifle';
     if (searchStr.includes('shield') || searchStr.includes('paladin') || searchStr.includes('guardian') || searchStr.includes('vanguard') || searchStr.includes('juggernaut')) return 'shield';
     if (searchStr.includes('tome') || searchStr.includes('book') || searchStr.includes('scholar') || searchStr.includes('hexer') || searchStr.includes('caster')) return 'tome';
     if (searchStr.includes('harp') || searchStr.includes('bard') || searchStr.includes('song') || searchStr.includes('instrument')) return 'harp';
@@ -1494,9 +2068,40 @@ export class StageUnitManager {
         if (actor.hitboxMesh.material) actor.hitboxMesh.material.dispose();
         this.scene.remove(actor.hitboxMesh);
       }
+      if (actor.statusRingMesh) {
+        if (actor.statusRingMesh.geometry) actor.statusRingMesh.geometry.dispose();
+        if (actor.statusRingMesh.material) actor.statusRingMesh.material.dispose();
+        this.scene.remove(actor.statusRingMesh);
+      }
       if (actor.sprite?.dispose) actor.sprite.dispose();
     }
     this.units.clear();
+
+    if (this.lootBags) {
+      for (const loot of this.lootBags.values()) {
+        if (loot.mesh) {
+          this.scene.remove(loot.mesh);
+          loot.mesh.traverse((c) => {
+            if (c.geometry) c.geometry.dispose();
+            if (c.material) c.material.dispose();
+          });
+        }
+      }
+      this.lootBags.clear();
+    }
+
+    if (this.itemFinishBake) {
+      try {
+        this.itemFinishBake.dispose();
+      } catch {}
+      this.itemFinishBake = null;
+    }
+    if (this.clothBagResources) {
+      try {
+        this.clothBagResources.dispose();
+      } catch {}
+      this.clothBagResources = null;
+    }
 
     for (const burst of this.hitBursts) {
       this.scene.remove(burst.group);
