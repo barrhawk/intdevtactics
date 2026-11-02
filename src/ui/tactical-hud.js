@@ -332,7 +332,7 @@ export class TacticalHUD {
 
     slice.forEach((entry, idx) => {
       const unit = entry.unit || entry;
-      const isAzure = (unit.team || 'azure').toLowerCase() === 'azure';
+      const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
       const teamClass = isAzure ? 'azure' : 'crimson';
       const teamLabel = isAzure ? 'AZURE' : 'CRIM';
       const isActive = activeUnit && (unit.id === activeUnit.id || idx === 0);
@@ -379,7 +379,7 @@ export class TacticalHUD {
       return;
     }
 
-    const isAzure = (unit.team || 'azure').toLowerCase() === 'azure';
+    const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
     this._renderActiveUnitCard(unit);
 
     // If it's an Azure Clan unit and in interactive mode, display FFTA Command Menu
@@ -696,7 +696,7 @@ export class TacticalHUD {
    * Render Bottom-Right Defender Card
    */
   _renderDefenderCard(container, unit) {
-    const isAzure = (unit.team || 'azure').toLowerCase() === 'azure';
+    const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
     const grade = (unit.grade || 'B').toUpperCase();
     const hp = Math.max(0, unit.hp ?? 100);
     const maxHp = unit.maxHp ?? 100;
@@ -911,7 +911,7 @@ export class TacticalHUD {
 
       if (!el) {
         el = document.createElement('div');
-        const isAzure = (unit.team || 'azure').toLowerCase() === 'azure';
+        const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
         el.className = `unit-overhead ${isAzure ? 'azure' : 'crimson'}`;
         container.appendChild(el);
         this.overheadMap.set(unitId, el);
@@ -1024,7 +1024,7 @@ export class TacticalHUD {
    * @param {() => void} [onPlayAgain]
    */
   showVictoryBanner(winningTeam, statsSummary = {}, onPlayAgain = null) {
-    const isAzure = (winningTeam || 'azure').toLowerCase() === 'azure';
+    const isAzure = (winningTeam || 'azure').toLowerCase() === 'azure' || (winningTeam || '').toLowerCase() === 'blue';
 
     const banner = document.createElement('div');
     banner.className = 'victory-banner-backdrop';

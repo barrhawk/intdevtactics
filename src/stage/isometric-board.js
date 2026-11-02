@@ -175,6 +175,8 @@ export class IsometricBoard {
           z,
           elevation,
           terrain,
+          type: terrain,
+          isWater: terrain === 'water',
           passable,
           worldX,
           worldY,
@@ -369,6 +371,18 @@ export class IsometricBoard {
   getTile(x, z) {
     if (x < 0 || x >= BOARD_SIZE || z < 0 || z >= BOARD_SIZE) return null;
     return this.tiles[z]?.[x] || null;
+  }
+
+  /**
+   * Check if tile at (x, z) is passable and not water.
+   * @param {number} x
+   * @param {number} z
+   * @returns {boolean}
+   */
+  isWalkable(x, z) {
+    const tile = this.getTile(x, z);
+    if (!tile) return false;
+    return tile.passable !== false && !tile.isWater && tile.terrain !== 'water';
   }
 
   /**

@@ -92,7 +92,7 @@ export function getBoardTile(board, x, z) {
  */
 function isWaterTile(tile) {
   if (!tile) return false;
-  return !!(tile.isWater || tile.water || tile.type === 'water');
+  return !!(tile.isWater || tile.water || tile.type === 'water' || tile.terrain === 'water' || tile.passable === false);
 }
 
 /**

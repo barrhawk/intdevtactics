@@ -196,6 +196,11 @@ export class StageUnitManager {
     if (!units || !units.length) return;
 
     for (const unit of units) {
+      if (unit.x === undefined && unit.gridX !== undefined) unit.x = unit.gridX;
+      if (unit.z === undefined && unit.gridZ !== undefined) unit.z = unit.gridZ;
+      if (unit.gridX === undefined && unit.x !== undefined) unit.gridX = unit.x;
+      if (unit.gridZ === undefined && unit.z !== undefined) unit.gridZ = unit.z;
+
       const facing = unit.facing || 'SE';
       const animation = unit.animation || 'Idle';
 
@@ -301,6 +306,8 @@ export class StageUnitManager {
             actor.ring.position.set(targetWorld.x, targetWorld.y + 0.08, targetWorld.z);
             actor.unit.x = next.x;
             actor.unit.z = next.z;
+            actor.unit.gridX = next.x;
+            actor.unit.gridZ = next.z;
             actor.unit.elevation = nextElev;
             resolve();
           }
@@ -639,8 +646,10 @@ export class StageUnitManager {
       return await res.json();
     }
     // Node.js fallback
-    const fs = await import('fs');
-    const path = await import('path');
+    const fsMod = 'fs';
+    const pathMod = 'path';
+    const fs = await import(/* @vite-ignore */ fsMod);
+    const path = await import(/* @vite-ignore */ pathMod);
     const resolved = path.resolve(process.cwd(), 'public', url.replace(/^\//, ''));
     return JSON.parse(fs.readFileSync(resolved, 'utf-8'));
   }
@@ -651,8 +660,10 @@ export class StageUnitManager {
       return await res.arrayBuffer();
     }
     // Node.js fallback
-    const fs = await import('fs');
-    const path = await import('path');
+    const fsMod = 'fs';
+    const pathMod = 'path';
+    const fs = await import(/* @vite-ignore */ fsMod);
+    const path = await import(/* @vite-ignore */ pathMod);
     const resolved = path.resolve(process.cwd(), 'public', url.replace(/^\//, ''));
     const buf = fs.readFileSync(resolved);
     return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
