@@ -6,16 +6,40 @@
 
 export const DIRECTIONS_8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
-export const DIRECTION_VECTORS_8 = {
-  N:  { dx:  0, dz: -1 },
-  NE: { dx:  1, dz: -1 },
-  E:  { dx:  1, dz:  0 },
-  SE: { dx:  1, dz:  1 },
-  S:  { dx:  0, dz:  1 },
-  SW: { dx: -1, dz:  1 },
-  W:  { dx: -1, dz:  0 },
-  NW: { dx: -1, dz: -1 }
+/**
+ * Coordinate facing vectors aligned strictly to Jimmy Lee's tactics-sprite.mjs:
+ * +X (dx > 0, dz === 0) -> 'SE' (index 1)
+ * +Z (dx === 0, dz > 0) -> 'SW' (index 3)
+ * -X (dx < 0, dz === 0) -> 'NW' (index 5)
+ * -Z (dx === 0, dz < 0) -> 'NE' (index 7)
+ * Also gracefully supports cardinal directions 'N', 'E', 'S', 'W' if passed by UI buttons.
+ */
+export const DIRECTION_VECTORS = {
+  SE: { dx:  1, dz:  0 },
+  SW: { dx:  0, dz:  1 },
+  NW: { dx: -1, dz:  0 },
+  NE: { dx:  0, dz: -1 },
+  E:  { dx:  1, dz: -1 },
+  S:  { dx:  1, dz:  1 },
+  W:  { dx: -1, dz:  1 },
+  N:  { dx: -1, dz: -1 }
 };
+
+export const DIRECTION_VECTORS_8 = DIRECTION_VECTORS;
+
+/**
+ * Safely resolves a facing string or vector to a normalized { dx, dz } vector.
+ * Default fallback facing is ALWAYS 'SE' (never undefined or 'S').
+ */
+export function facingToVector(facing) {
+  if (typeof facing === 'string') {
+    const key = facing.toUpperCase();
+    if (DIRECTION_VECTORS[key]) return DIRECTION_VECTORS[key];
+  } else if (facing && typeof facing.dx === 'number' && typeof facing.dz === 'number') {
+    return facing;
+  }
+  return DIRECTION_VECTORS.SE;
+}
 
 /**
  * Seeded PRNG helper (Mulberry32) for deterministic combat rolls.
@@ -36,23 +60,33 @@ function createSeededRng(seed) {
 }
 
 /**
- * Normalizes vector offset to one of 8 cardinal / ordinal directions.
+ * Normalizes vector offset to one of 8 directions aligned with Jimmy Lee's tactics-sprite grid:
+ * +X (dx > 0, dz === 0) -> 'SE' (index 1)
+ * +Z (dx === 0, dz > 0) -> 'SW' (index 3)
+ * -X (dx < 0, dz === 0) -> 'NW' (index 5)
+ * -Z (dx === 0, dz < 0) -> 'NE' (index 7)
+ * Default fallback facing is ALWAYS 'SE' (never 'S' or undefined).
  */
 export function vectorToFacing(dx, dz) {
-  if (dx === 0 && dz === 0) return 'S';
+  if (dx === 0 && dz === 0) return 'SE';
+  if (dx > 0 && dz === 0) return 'SE';
+  if (dx === 0 && dz > 0) return 'SW';
+  if (dx < 0 && dz === 0) return 'NW';
+  if (dx === 0 && dz < 0) return 'NE';
+
   const angle = Math.atan2(dz, dx); // [-PI, PI]
   const sector = Math.round(angle / (Math.PI / 4));
   switch (sector) {
-    case 0: return 'E';
-    case 1: return 'SE';
-    case 2: return 'S';
-    case 3: return 'SW';
+    case 0: return 'SE';
+    case 1: return 'S';
+    case 2: return 'SW';
+    case 3: return 'W';
     case 4:
-    case -4: return 'W';
-    case -3: return 'NW';
-    case -2: return 'N';
-    case -1: return 'NE';
-    default: return 'S';
+    case -4: return 'NW';
+    case -3: return 'N';
+    case -2: return 'NE';
+    case -1: return 'E';
+    default: return 'SE';
   }
 }
 
@@ -65,6 +99,36 @@ export function calculateFacing(fromPos, toPos) {
   const tx = toPos.x !== undefined ? toPos.x : (toPos.gridX ?? 0);
   const tz = toPos.z !== undefined ? toPos.z : (toPos.gridZ ?? 0);
   return vectorToFacing(tx - fx, tz - fz);
+}
+
+/**
+ * Evaluates relative attack angle ('Front', 'Side', 'Back') based on defender facing.
+ * Dot product with defender facing vector:
+ * cosTheta >= 0.52 -> 'Front'
+ * cosTheta <= -0.52 -> 'Back'
+ * otherwise -> 'Side'
+ */
+export function getRelativeDirection(attacker, defender, optFacing = null) {
+  const ax = attacker.gridX !== undefined ? attacker.gridX : (attacker.x ?? 0);
+  const az = attacker.gridZ !== undefined ? attacker.gridZ : (attacker.z ?? 0);
+  const dx = defender.gridX !== undefined ? defender.gridX : (defender.x ?? 0);
+  const dz = defender.gridZ !== undefined ? defender.gridZ : (defender.z ?? 0);
+
+  const diffX = ax - dx;
+  const diffZ = az - dz;
+  const defFacing = optFacing || defender.facing || 'SE';
+  const defVec = facingToVector(defFacing);
+
+  const lenAtk = Math.hypot(diffX, diffZ);
+  const lenFacing = Math.hypot(defVec.dx, defVec.dz);
+
+  if (lenAtk > 0 && lenFacing > 0) {
+    const cosTheta = (diffX * defVec.dx + diffZ * defVec.dz) / (lenAtk * lenFacing);
+    if (cosTheta <= -0.52) return 'Back';
+    if (cosTheta >= 0.52) return 'Front';
+    return 'Side';
+  }
+  return 'Front';
 }
 
 /**
@@ -318,7 +382,7 @@ export function resolveAttackAnimation(unit, ability, stance = 'Mid') {
  * - Animation and held model
  * - Orb reward estimate
  */
-export function calculateCombatForecast(attacker, defender, ability, board) {
+export function calculateCombatForecast(attacker, defender, ability, board, activeLaw = null) {
   const attackerElev = typeof attacker.elevation === 'number'
     ? attacker.elevation
     : (getBoardTile(board, attacker.gridX, attacker.gridZ)?.elevation ?? 0);
@@ -329,27 +393,8 @@ export function calculateCombatForecast(attacker, defender, ability, board) {
 
   const stance = getElevationStance(attackerElev, defenderElev);
 
-  // Directional facing calculation
-  const dx = attacker.gridX - defender.gridX;
-  const dz = attacker.gridZ - defender.gridZ;
-  const defFacing = defender.facing || 'S';
-  const defVec = DIRECTION_VECTORS_8[defFacing] || { dx: 0, dz: 1 };
-
-  let attackAngle = 'Front';
-  const lenAtk = Math.hypot(dx, dz);
-  const lenFacing = Math.hypot(defVec.dx, defVec.dz);
-
-  if (lenAtk > 0 && lenFacing > 0) {
-    // Dot product between defender's facing vector and vector pointing toward attacker
-    const cosTheta = (dx * defVec.dx + dz * defVec.dz) / (lenAtk * lenFacing);
-    if (cosTheta <= -0.52) {
-      attackAngle = 'Back';
-    } else if (cosTheta >= 0.52) {
-      attackAngle = 'Front';
-    } else {
-      attackAngle = 'Side';
-    }
-  }
+  // Directional facing calculation using Jimmy Lee grid alignment
+  const attackAngle = getRelativeDirection(attacker, defender);
 
   const animationName = resolveAttackAnimation(attacker, ability, stance);
   const heldModelName = attacker?.weapon?.heldModelName || 'sword';
@@ -412,9 +457,27 @@ export function calculateCombatForecast(attacker, defender, ability, board) {
     ? (defender.stats?.magicResistance || Math.round((defender.stats?.armor || 8) * 0.75))
     : (defender.stats?.armor || 8);
 
+  // FFTA Judge Law Modifiers
+  const law = activeLaw || ability?.activeLaw || board?.activeLaw;
+  let lawDmgMult = 1.0;
+  if (law) {
+    if (law.id === 'no_backstab' && attackAngle === 'Front') {
+      lawDmgMult *= 1.10; // +10% Front DMG bonus
+    } else if (law.id === 'no_magic' && !isMagic) {
+      lawDmgMult *= 1.15; // +15% Physical ATK
+    } else if (law.id === 'no_blades') {
+      const wType = (attacker?.weapon?.weaponType || attacker?.weaponType || attacker?.weapon?.heldModelName || '').toLowerCase();
+      if (wType === 'spear' || wType === 'rifle' || isMagic) {
+        lawDmgMult *= 1.15; // +15% Spear/Rifle/Magic DMG
+      }
+    } else if (law.id === 'no_low_blow' && attackerElev > defenderElev) {
+      lawDmgMult *= 1.20; // +20% High Strike DMG
+    }
+  }
+
   const powerMult = ability?.powerMult || 1.0;
   let baseDamage = Math.max(6, (atkStat * 1.55 - defStat * 0.70)) * powerMult;
-  baseDamage = baseDamage * angleDmgMult * elevationDmgMult;
+  baseDamage = baseDamage * angleDmgMult * elevationDmgMult * lawDmgMult;
   const expectedDamage = Math.max(1, Math.round(baseDamage));
 
   // Hit chance
@@ -452,9 +515,9 @@ export function calculateCombatForecast(attacker, defender, ability, board) {
  * Deterministically executes a combat action.
  * Resolves hit, miss, block, crit; updates HP, MP, alive status; determines animations and orbs earned.
  */
-export function executeCombatAction(attacker, defender, ability, board, rngSeed) {
+export function executeCombatAction(attacker, defender, ability, board, rngSeed, activeLaw = null) {
   const rng = createSeededRng(rngSeed || Math.floor(Math.random() * 0xffffffff));
-  const forecast = calculateCombatForecast(attacker, defender, ability, board);
+  const forecast = calculateCombatForecast(attacker, defender, ability, board, activeLaw);
 
   // Spend attacker MP if applicable
   const mpCost = ability?.costMp || 0;

@@ -312,11 +312,21 @@ export async function craftItem(orbs, seed) {
 
 /**
  * Implements Set.world's canonical 10% disassembly sink schedule.
+ * Accepts EITHER a rawItem OR a wrapper item, falling back to target.tier || target.rarity || 'C'.
  * Schedule: S: 1562, A: 312, B: 62, C: 12, D: 2, E: 1, F: 1.
  */
-export function salvageItem(item) {
-  if (!item) return 0;
-  const grade = (item.tierGrade || item.material?.tierGrade || item.grade || 'F').toUpperCase();
+export function salvageItem(rawItemOrItem) {
+  if (!rawItemOrItem) return 0;
+  const target = rawItemOrItem?.rawItem || rawItemOrItem;
+  const grade = (
+    target.tierGrade ||
+    target.material?.tierGrade ||
+    target.grade ||
+    target.tier ||
+    target.rarity ||
+    'C'
+  ).toString().toUpperCase();
+
   const schedule = {
     S: 1562,
     A: 312,
@@ -326,8 +336,9 @@ export function salvageItem(item) {
     E: 1,
     F: 1
   };
-  const base = schedule[grade] ?? 1;
-  const valueSalvage = Math.floor((item.orbValue || 0) * 0.10);
+  const base = schedule[grade] ?? 12; // 'C' tier fallback is 12 Set Orbs
+  const orbValue = target.orbValue ?? rawItemOrItem.orbValue ?? 0;
+  const valueSalvage = Math.floor(orbValue * 0.10);
   return Math.max(base, valueSalvage);
 }
 
@@ -550,7 +561,41 @@ export function mapToolToWeaponSpec(toolItem, className) {
     };
   }
 
-  // 7. Default: Sword (sword, greatsword, mace, hammer, knight, etc.)
+  // 7. Shield (shield, buckler, aegis, bulwark, juggernaut, defender)
+  if (/(shield|buckler|aegis|bulwark|juggernaut|defender)/i.test(combined)) {
+    return {
+      weaponType: 'shield',
+      heldModelName: 'shield',
+      attackRange: { min: 1, max: 1 },
+      baseAnimPrefix: 'Swing',
+      abilities: [
+        {
+          id: 'shield_bash',
+          name: 'Shield Bash',
+          range: { min: 1, max: 1 },
+          anim: 'Swing Mid',
+          animPrefix: 'Swing',
+          powerMult: 1.15,
+          costMp: 4,
+          description: 'Martial shield bash staggering the opponent.'
+        },
+        {
+          id: 'iron_bulwark',
+          name: 'Iron Bulwark',
+          range: { min: 1, max: 1 },
+          anim: 'Shield Block Mid',
+          animPrefix: 'Shield Block',
+          isSupport: true,
+          ctBuff: 15,
+          healPower: 25,
+          costMp: 6,
+          description: 'Hunker down behind fortified tower shield, recovering 25 HP and +15 CT.'
+        }
+      ]
+    };
+  }
+
+  // 8. Default: Sword (sword, greatsword, mace, hammer, knight, etc.)
   return {
     weaponType: 'sword',
     heldModelName: 'sword',
@@ -694,29 +739,155 @@ export async function generateClanRoster(baseSeed, board) {
     const charData = await rollCharacter(unitSeed);
 
     const isBlue = i < 4;
-    const team = isBlue ? 'blue' : 'red';
+    const team = isBlue ? 'azure' : 'crimson';
     const clanName = isBlue ? 'Azure Clan' : 'Crimson Order';
     const pos = isBlue ? pickedBluePositions[i] : pickedRedPositions[i - 4];
     const elevation = getTileElevation(board, pos.x, pos.z);
+    const slot = i % 4;
 
-    const toolItem = charData.equipment?.tool || charData.equipment?.weapon;
-    const className = charData.class?.name || (isBlue ? 'Dragoon' : 'Samurai');
-    const weaponSpec = mapToolToWeaponSpec(toolItem, className);
+    // Guaranteed facing: both teams face toward center of battlefield
+    // Azure Clan (1..3, 1..3) -> 'SE'; Crimson Order (6..8, 6..8) -> 'NW'
+    const facing = isBlue ? 'SE' : 'NW';
 
-    const maxHp = Math.round(charData.attributes?.maxHealth || 100);
-    const speed = Math.round((charData.attributes?.walkSpeed || 1.0) * 10) + 6;
+    let className = 'Knight';
+    let weaponSpec = null;
+    let isBoss = false;
+    let rank = 'SOLDIER';
+    let archetypeTitle = 'Tactical Unit';
+    let paletteId = isBlue ? 'azure_knight' : 'crimson_warlord';
+    let scale = 1.0;
+    let charName = '';
+    let maxHp = Math.round(charData.attributes?.maxHealth || 100);
+
+    if (isBlue) {
+      // Azure Clan squad with rich weapon variety across 4 distinct archetypes
+      if (slot === 0) {
+        className = 'Knight';
+        weaponSpec = mapToolToWeaponSpec({ name: 'Mythril Broadsword', type: 'sword' }, className);
+        paletteId = 'azure_knight';
+        rank = 'CHAMPION';
+        archetypeTitle = 'Azure Knight';
+        scale = 1.0;
+      } else if (slot === 1) {
+        className = 'Mesmer';
+        weaponSpec = mapToolToWeaponSpec({ name: 'Arcane Tome', type: 'tome' }, className);
+        paletteId = 'azure_mage';
+        rank = 'MYSTIC';
+        archetypeTitle = 'Azure Mage';
+        scale = 1.0;
+      } else if (slot === 2) {
+        className = 'Fusilier';
+        weaponSpec = mapToolToWeaponSpec({ name: 'Precision Rifle', type: 'rifle' }, className);
+        paletteId = 'azure_ranger';
+        rank = 'MARKSMAN';
+        archetypeTitle = 'Azure Ranger';
+        scale = 1.0;
+      } else {
+        className = 'Dragoon';
+        weaponSpec = mapToolToWeaponSpec({ name: 'Holy Lance', type: 'spear' }, className);
+        paletteId = 'azure_paladin';
+        rank = 'VANGUARD';
+        archetypeTitle = 'Azure Paladin';
+        scale = 1.0;
+      }
+      charName = charData.name || `Azure ${className}`;
+    } else {
+      // Crimson Order enemies with 4 guaranteed distinct Enemy Archetypes
+      if (slot === 0) {
+        // Slot 0: Boss Commander - Crimson Warlord
+        isBoss = true;
+        rank = 'COMMANDER';
+        archetypeTitle = 'Crimson Warlord';
+        paletteId = 'crimson_warlord';
+        scale = 1.18;
+        const bossChoice = (unitSeed % 2 === 0);
+        className = bossChoice ? 'Samurai' : 'Dragoon';
+        weaponSpec = mapToolToWeaponSpec(
+          bossChoice ? { name: 'Blood Katana', type: 'katana' } : { name: 'Dread Spear', type: 'spear' },
+          className
+        );
+        // +15% ATK bonus, +35% Boss HP bonus
+        charData.attributes = { ...charData.attributes };
+        charData.attributes.physicalDamage = Math.round((charData.attributes?.physicalDamage || 22) * 1.15);
+        maxHp = Math.round((charData.attributes?.maxHealth || 110) * 1.35);
+        const namePart = charData.name?.split(' ')?.[0] || 'Malakor';
+        charName = `Warlord ${namePart}`;
+      } else if (slot === 1) {
+        // Slot 1: Vanguard Tank - Blood-Iron Juggernaut
+        isBoss = false;
+        rank = 'VANGUARD';
+        archetypeTitle = 'Blood-Iron Juggernaut';
+        paletteId = 'crimson_vanguard';
+        scale = 1.08;
+        className = (unitSeed % 2 === 0) ? 'Paladin' : 'Knight';
+        weaponSpec = mapToolToWeaponSpec({ name: 'Tower Shield', type: 'shield' }, className);
+        // High DEF and HP
+        charData.attributes = { ...charData.attributes };
+        charData.attributes.armor = Math.round((charData.attributes?.armor || 10) * 1.40) + 6;
+        maxHp = Math.round((charData.attributes?.maxHealth || 100) * 1.25);
+        const namePart = charData.name?.split(' ')?.[0] || 'Krag';
+        charName = `Juggernaut ${namePart}`;
+      } else if (slot === 2) {
+        // Slot 2: Hexer / Support Caster - Void-Pyre Hexer
+        isBoss = false;
+        rank = 'HEXER';
+        archetypeTitle = 'Void-Pyre Hexer';
+        paletteId = 'crimson_hexer';
+        scale = 1.00;
+        className = (unitSeed % 2 === 0) ? 'Black Mage' : 'Mesmer';
+        weaponSpec = mapToolToWeaponSpec(
+          (unitSeed % 2 === 0) ? { name: 'Shadow Tome', type: 'tome' } : { name: 'Hex Harp', type: 'harp' },
+          className
+        );
+        // High MAG and ranged reach
+        charData.attributes = { ...charData.attributes };
+        charData.attributes.magicDamage = Math.round((charData.attributes?.magicDamage || 20) * 1.35) + 6;
+        maxHp = Math.round(charData.attributes?.maxHealth || 90);
+        const namePart = charData.name?.split(' ')?.[0] || 'Moros';
+        charName = `Hexer ${namePart}`;
+      } else {
+        // Slot 3: Agile Sniper - Nightshade Deadeye
+        isBoss = false;
+        rank = 'DEADEYE';
+        archetypeTitle = 'Nightshade Deadeye';
+        paletteId = 'crimson_deadeye';
+        scale = 0.94;
+        className = (unitSeed % 2 === 0) ? 'Fusilier' : 'Archer';
+        weaponSpec = mapToolToWeaponSpec({ name: 'Night Sniper', type: 'rifle' }, className);
+        // High SPD, accuracy, and dodge
+        charData.attributes = { ...charData.attributes };
+        charData.attributes.walkSpeed = parseFloat(((charData.attributes?.walkSpeed || 1.1) * 1.20).toFixed(2));
+        charData.attributes.accuracy = Math.round((charData.attributes?.accuracy || 80) * 1.15) + 5;
+        charData.attributes.dodge = Math.round((charData.attributes?.dodge || 15) * 1.30) + 5;
+        maxHp = Math.round(charData.attributes?.maxHealth || 92);
+        const namePart = charData.name?.split(' ')?.[0] || 'Vane';
+        charName = `Deadeye ${namePart}`;
+      }
+    }
+
+    const hp = maxHp;
+    const speed = Math.round((charData.attributes?.walkSpeed || 1.0) * 10) + (isBoss ? 7 : 6);
     const moveRange = 3 + (charData.attributes?.walkSpeed > 1.25 ? 1 : 0);
 
     const unit = {
-      id: `unit_${team}_${i % 4}`,
+      id: `unit_${team}_${slot}`,
+      unitId: `unit_${team}_${slot}`,
       unitIndex: i,
       seed: unitSeed,
-      name: charData.name || `${clanName} ${className}`,
+      name: charName,
       team,
+      clan: team,
       clanName,
       className,
+      job: className,
+      class: className,
+      isBoss,
+      rank,
+      archetypeTitle,
+      paletteId,
+      scale,
       grade: charData.tierGrade || 'C',
-      hp: maxHp,
+      hp,
       maxHp,
       mp: 40,
       maxMp: 40,
@@ -725,14 +896,20 @@ export async function generateClanRoster(baseSeed, board) {
       jumpHeight: 2,
       gridX: pos.x,
       gridZ: pos.z,
+      x: pos.x,
+      z: pos.z,
       elevation,
-      facing: isBlue ? 'NE' : 'SW',
+      facing,
       ct: Math.floor((deriveSeed(normalizedBase, i + 99) % 25) + 15),
       alive: true,
       weapon: weaponSpec,
+      weaponType: weaponSpec.weaponType,
+      weaponModel: weaponSpec.heldModelName,
       abilities: weaponSpec.abilities,
       stats: charData.attributes || {},
       equipment: charData.equipment || {},
+      yellowCards: 0,
+      redCards: 0,
       rawCharacter: charData
     };
 
