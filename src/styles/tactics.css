@@ -244,6 +244,55 @@ html, body {
   gap: 14px;
 }
 
+.top-bar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  max-width: 520px;
+  margin: 0 12px;
+}
+
+.judge-law-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 27, 75, 0.85));
+  border: 1px solid rgba(245, 158, 11, 0.65);
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.25), inset 0 0 8px rgba(245, 158, 11, 0.1);
+  padding: 4px 12px;
+  border-radius: 14px;
+  cursor: help;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  animation: lawPillGlow 3s infinite alternate ease-in-out;
+}
+
+.judge-law-pill:hover {
+  border-color: var(--text-gold-bright);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.5);
+  transform: translateY(-1px);
+}
+
+.judge-law-pill .law-scale-glyph {
+  font-size: 13px;
+  color: var(--text-gold);
+  filter: drop-shadow(0 0 6px var(--border-gold));
+}
+
+.judge-law-pill .law-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--text-gold-bright);
+  text-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+}
+
+@keyframes lawPillGlow {
+  0% { border-color: rgba(245, 158, 11, 0.45); }
+  100% { border-color: rgba(254, 240, 138, 0.85); box-shadow: 0 0 14px rgba(245, 158, 11, 0.4); }
+}
+
 .top-brand {
   font-size: 12px;
   font-weight: 800;
@@ -445,6 +494,38 @@ html, body {
 
 .turn-card.active .turn-ct-bar-fill {
   background: linear-gradient(90deg, #ffd700, #f59e0b);
+}
+
+.turn-boss-crown {
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b, #e11d48);
+  box-shadow: 0 0 8px rgba(225, 29, 72, 0.6);
+  border: 1px solid #ffd700;
+  text-shadow: 0 0 4px #000;
+  animation: bossPulse 1.5s infinite alternate ease-in-out;
+}
+
+@keyframes bossPulse {
+  0% { box-shadow: 0 0 6px rgba(245, 158, 11, 0.5); }
+  100% { box-shadow: 0 0 12px rgba(244, 63, 94, 0.9); }
+}
+
+.turn-weapon-tag {
+  font-size: 8px;
+  color: var(--text-gold);
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.turn-card.boss-card {
+  border-left: 4px solid #f43f5e;
+  border-top: 1px solid rgba(245, 158, 11, 0.4);
+  background: linear-gradient(180deg, rgba(225, 29, 72, 0.12), rgba(12, 16, 24, 0.9));
 }
 
 /* ==========================================================================
@@ -1133,16 +1214,25 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   pointer-events: none;
   transition: opacity 0.2s ease;
+  z-index: 12;
+}
+
+.unit-overhead.active {
+  z-index: 15;
 }
 
 .overhead-crown {
-  font-size: 12px;
-  color: var(--grade-s);
-  filter: drop-shadow(0 0 4px var(--grade-s));
+  font-size: 13px;
+  filter: drop-shadow(0 0 6px var(--grade-s));
   animation: crownBob 1.2s infinite ease-in-out;
+}
+
+.overhead-crown.crimson-crown {
+  color: #f43f5e;
+  filter: drop-shadow(0 0 6px #f43f5e);
 }
 
 @keyframes crownBob {
@@ -1150,44 +1240,138 @@ html, body {
   50% { transform: translateY(-3px); }
 }
 
-.overhead-tag {
-  background: rgba(0, 0, 0, 0.85);
-  border: 1px solid var(--border-subtle);
-  border-radius: 2px;
-  padding: 1px 4px;
+/* Azure Clan Overhead: Clean royal-blue shield crest (◆), cyan-blue HP fill, crisp white name + class pill */
+.overhead-pill.azure-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(8, 20, 38, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.65);
+  border-radius: 4px;
+  padding: 2px 7px;
   font-size: 9px;
   font-weight: 700;
-  color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7), 0 0 8px rgba(56, 189, 248, 0.25);
   white-space: nowrap;
 }
 
-.unit-overhead.azure .overhead-tag {
-  border-color: var(--azure);
-  color: #bae6fd;
+.overhead-pill.azure-pill .crest-icon {
+  color: var(--azure);
+  font-size: 9px;
 }
 
-.unit-overhead.crimson .overhead-tag {
-  border-color: var(--crimson);
-  color: #fecdd3;
+.overhead-pill.azure-pill .overhead-unit-name {
+  color: #f8fafc;
+  font-weight: 800;
 }
 
-.overhead-hp-bar {
-  width: 44px;
+.overhead-pill.azure-pill .overhead-class-badge {
+  color: #7dd3fc;
+  font-weight: 600;
+}
+
+.overhead-pill.azure-pill .overhead-weapon-tag {
+  color: var(--text-gold);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.overhead-hp-bar.azure-bar {
+  width: 52px;
   height: 4px;
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(56, 189, 248, 0.4);
   border-radius: 2px;
   overflow: hidden;
 }
 
-.overhead-hp-fill {
+.overhead-hp-fill.azure-fill {
   height: 100%;
-  background: #10b981;
+  background: linear-gradient(90deg, #38bdf8, #0284c7);
   transition: width 0.25s ease;
 }
 
-.unit-overhead.crimson .overhead-hp-fill {
-  background: #f43f5e;
+/* Crimson Order Enemies: Jagged dark-obsidian & blood-crimson frame with angled/horned corners,
+   crimson-orange HP fill, enemy rank/class badge, and weapon icon */
+.overhead-pill.crimson-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(135deg, rgba(24, 10, 16, 0.95), rgba(40, 12, 20, 0.95));
+  border: 1px solid #be123c;
+  border-top: 2px solid #f43f5e;
+  /* Angled jagged frame corners */
+  clip-path: polygon(6px 0%, calc(100% - 6px) 0%, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0% calc(100% - 6px), 0% 6px);
+  padding: 2px 8px;
+  font-size: 9px;
+  font-weight: 800;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.85), 0 0 10px rgba(244, 63, 94, 0.4);
+  white-space: nowrap;
+}
+
+.overhead-pill.crimson-pill .enemy-role-badge {
+  color: #fecdd3;
+  text-shadow: 0 0 6px rgba(244, 63, 94, 0.7);
+  letter-spacing: 0.04em;
+}
+
+.overhead-pill.crimson-pill .enemy-weapon-badge {
+  color: #fdba74;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.overhead-pill.crimson-pill.boss-pill {
+  border-color: #ffd700;
+  border-top-color: #f59e0b;
+  background: linear-gradient(135deg, rgba(45, 12, 18, 0.98), rgba(65, 16, 24, 0.98));
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.6), 0 0 8px rgba(244, 63, 94, 0.7);
+  animation: crimsonBossGlow 1.8s infinite alternate ease-in-out;
+}
+
+@keyframes crimsonBossGlow {
+  0% { box-shadow: 0 0 10px rgba(244, 63, 94, 0.4); }
+  100% { box-shadow: 0 0 18px rgba(245, 158, 11, 0.85); }
+}
+
+.overhead-pill.crimson-pill.boss-pill .enemy-role-badge {
+  color: #fef08a;
+  text-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+}
+
+.overhead-hp-bar.crimson-bar {
+  width: 52px;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(244, 63, 94, 0.45);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.overhead-hp-fill.crimson-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f43f5e, #fb923c);
+  transition: width 0.25s ease;
+}
+
+.overhead-hp-fill.danger {
+  background: linear-gradient(90deg, #f43f5e, #fb7185) !important;
+}
+
+/* Defender Status Card Differentiation */
+.unit-status-card.target-unit.crimson {
+  border-left: 3px solid var(--crimson);
+  background: linear-gradient(135deg, rgba(25, 12, 18, 0.88), rgba(12, 16, 24, 0.92));
+}
+
+.unit-status-card.target-unit.crimson .stat-bar-fill.crimson-fill {
+  background: linear-gradient(90deg, #f43f5e, #fb923c);
+}
+
+.unit-status-card.target-unit.boss {
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  border-left: 4px solid #f43f5e;
+  box-shadow: 0 0 16px rgba(244, 63, 94, 0.35);
 }
 
 /* Popups container & Floating damage numbers */
