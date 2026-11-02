@@ -1023,10 +1023,12 @@ export class TacticalHUD {
       if (!el) {
         el = document.createElement('div');
         el.className = classNameAttr;
+        el._lastClass = classNameAttr;
         container.appendChild(el);
         this.overheadMap.set(unitId, el);
-      } else {
+      } else if (el._lastClass !== classNameAttr) {
         el.className = classNameAttr;
+        el._lastClass = classNameAttr;
       }
 
       el.style.display = 'flex';
@@ -1037,9 +1039,10 @@ export class TacticalHUD {
       const maxHp = unit.maxHp ?? 100;
       const hpPct = Math.min(100, Math.round((hp / maxHp) * 100));
 
+      let nextHtml = '';
       if (isAzure) {
         // Azure Clan: Clean royal-blue shield crest (◆), cyan-blue HP fill, crisp white name + class pill
-        el.innerHTML = `
+        nextHtml = `
           ${isActive ? '<span class="overhead-crown azure-crown">👑</span>' : ''}
           <div class="overhead-pill azure-pill">
             <span class="crest-icon">◆</span>
@@ -1070,7 +1073,7 @@ export class TacticalHUD {
           roleBadge = `⚔ ${unit.name || uClass.toUpperCase()}`;
         }
 
-        el.innerHTML = `
+        nextHtml = `
           ${isActive ? '<span class="overhead-crown crimson-crown">⚔</span>' : ''}
           <div class="overhead-pill crimson-pill ${isRaid ? 'boss-pill raid-pill' : isBoss ? 'boss-pill' : ''}">
             <span class="enemy-role-badge">${roleBadge}</span>
@@ -1081,6 +1084,11 @@ export class TacticalHUD {
             <div class="overhead-hp-fill crimson-fill ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
           </div>
         `;
+      }
+
+      if (el._lastHtml !== nextHtml) {
+        el.innerHTML = nextHtml;
+        el._lastHtml = nextHtml;
       }
     });
 

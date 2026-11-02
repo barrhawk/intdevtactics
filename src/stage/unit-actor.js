@@ -582,6 +582,7 @@ export class StageUnitManager {
       const bagMat = this._createTierMaterial(team, finishTier, true);
       const group = new THREE.Group();
       const bagMesh = createClothBagMesh(bag, this.clothBagResources, bagMat, group);
+      syncClothBagMesh(bagMesh, bag, new THREE.Vector3(0, 0, 0), 1, 0);
       group.userData.clothBag = { bag, bagMesh };
       group.name = `WeaponMesh_cloth_bag_${team}_${finishTier}`;
       return group;
@@ -981,9 +982,7 @@ export class StageUnitManager {
     if (!actor || !path || path.length <= 1) return;
 
     const getNow = typeof nowSecGetter === 'function' ? nowSecGetter : () => performance.now() / 1000;
-    const nextFrame = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame
-      : (cb) => setTimeout(cb, 16);
+    const nextFrame = (cb) => setTimeout(cb, 16);
 
     for (let i = 0; i < path.length - 1; i++) {
       const prev = path[i];
@@ -996,6 +995,9 @@ export class StageUnitManager {
       const prevElev = prev.elevation !== undefined ? prev.elevation : (board.getTile(prev.x, prev.z)?.elevation ?? 0);
       const nextElev = next.elevation !== undefined ? next.elevation : (board.getTile(next.x, next.z)?.elevation ?? 0);
       const dElev = nextElev - prevElev;
+
+      const startWorld = board.tileToWorld(prev.x, prev.z, prevElev);
+      const targetWorld = board.tileToWorld(next.x, next.z, nextElev);
 
       const nextTile = board.getTile(next.x, next.z);
       const prevTile = board.getTile(prev.x, prev.z);
@@ -1016,8 +1018,6 @@ export class StageUnitManager {
 
       actor.sprite.play(animName, getNow());
 
-      const startWorld = board.tileToWorld(prev.x, prev.z, prevElev);
-      const targetWorld = board.tileToWorld(next.x, next.z, nextElev);
       const stepDuration = dElev !== 0 ? 0.38 : 0.28;
 
       // Defect D-18 fix: if walking onto a dead unit's tile, hide the corpse
@@ -1087,12 +1087,6 @@ export class StageUnitManager {
         };
         nextFrame(tick);
       });
-
-      // 3D Loot Bag pickup if stepping on dropped pouch tile
-      const lootKey = `${next.x},${next.z}`;
-      if (this.lootBags && this.lootBags.has(lootKey)) {
-        await this.pickupLootBag(next.x, next.z, actor, getNow);
-      }
     }
 
     // Finished movement: return to 'Idle' (or 'Critical' if HP < 25%)
@@ -1120,9 +1114,7 @@ export class StageUnitManager {
     if (!attackerActor || !defenderActor) return;
 
     const getNow = typeof nowSecGetter === 'function' ? nowSecGetter : () => performance.now() / 1000;
-    const nextFrame = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame
-      : (cb) => setTimeout(cb, 16);
+    const nextFrame = (cb) => setTimeout(cb, 16);
 
     // 1. Turn attacker toward defender
     const attFacing = board.getFacingBetween(attackerActor.unit.x, attackerActor.unit.z, defenderActor.unit.x, defenderActor.unit.z);
@@ -1312,6 +1304,13 @@ export class StageUnitManager {
         const { bag } = weaponMesh.userData.clothBag;
         whipClothBag(bag, defenderPos.x, defenderPos.y, 0.3);
         stepClothBag(bag, attackerPos.x, attackerPos.y);
+        syncClothBagMesh(
+          weaponMesh.userData.clothBag.bagMesh,
+          bag,
+          new THREE.Vector3(0, 0, 0),
+          1,
+          0
+        );
       }
       await this._sleep(300);
     }
@@ -1393,13 +1392,6 @@ export class StageUnitManager {
        defenderActor.unit.isDead);
 
     if (isDead) {
-      if (board && typeof this.spawnLootBag === 'function') {
-        this.spawnLootBag(defenderActor.unit.x, defenderActor.unit.z, board, {
-          orbs: 50,
-          item: 'Set Relic',
-          ...outcome?.loot
-        });
-      }
       await this.playDefeat(defenderActor.unit.id);
     } else {
       if (defenderActor.idleWeaponMesh) {
@@ -1505,7 +1497,12 @@ export class StageUnitManager {
    */
   spawnLootBag(x, z, board, lootData) {
     const key = `${x},${z}`;
-    if (this.lootBags.has(key)) return this.lootBags.get(key);
+    if (this.lootBags.has(key)) {
+      if (lootData) {
+        this.lootBags.get(key).data = lootData;
+      }
+      return this.lootBags.get(key);
+    }
 
     const worldPos = board ? board.tileToWorld(x, z) : new THREE.Vector3(0, 0, 0);
     const group = new THREE.Group();
@@ -1697,7 +1694,7 @@ export class StageUnitManager {
     if (!actor) return;
 
     const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
-    const nextFrame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
+    const nextFrame = (cb) => setTimeout(cb, 16);
 
     const refs = patchGroupSpawnMaterials(actor.sprite.group);
 

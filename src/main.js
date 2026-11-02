@@ -502,9 +502,10 @@ class TacticsGame {
         const headAnchor = this.stageUnitManager.getUnitScreenAnchor(this.activeUnit.id, this.isometricBoard);
         this.tacticalHud.spawnFloatingText(headAnchor, statusLabel, 'crit', this.projectWorldToScreen);
 
-        this.activeUnit.status = null;
-        this.stageUnitManager.setUnitStatus?.(this.activeUnit.id, null);
         this.turnManager.endTurn(this.activeUnit, false, false);
+        if (!this.activeUnit.status) {
+          this.stageUnitManager.setUnitStatus?.(this.activeUnit.id, null);
+        }
         this.isometricBoard.setActiveUnitTile(null, null);
 
         this._isProcessingTurn = false;
@@ -599,69 +600,74 @@ class TacticsGame {
     this.isometricBoard.clearHighlights();
     this.tacticalHud.setActiveUnit(this.activeUnit, 'animating');
 
-    // Smooth step-by-step movement with Jump Up/Down arc animations
-    await this.stageUnitManager.animateMovePath(
-      this.activeUnit,
-      matchedPathEntry.path,
-      this.isometricBoard
-    );
-    if (this.matchId !== currentMatchId) return;
+    try {
+      // Smooth step-by-step movement with Jump Up/Down arc animations
+      await this.stageUnitManager.animateMovePath(
+        this.activeUnit,
+        matchedPathEntry.path,
+        this.isometricBoard
+      );
+      if (this.matchId !== currentMatchId) return;
 
-    // Ensure synchronized coordinates
-    this.activeUnit.gridX = matchedPathEntry.x;
-    this.activeUnit.gridZ = matchedPathEntry.z;
-    this.activeUnit.x = matchedPathEntry.x;
-    this.activeUnit.z = matchedPathEntry.z;
-    this.activeUnit.elevation = matchedPathEntry.elevation ?? this.activeUnit.elevation;
+      // Ensure synchronized coordinates
+      this.activeUnit.gridX = matchedPathEntry.x;
+      this.activeUnit.gridZ = matchedPathEntry.z;
+      this.activeUnit.x = matchedPathEntry.x;
+      this.activeUnit.z = matchedPathEntry.z;
+      this.activeUnit.elevation = matchedPathEntry.elevation ?? this.activeUnit.elevation;
 
-    // Refocus active unit gold highlight and camera
-    this.isometricBoard.setActiveUnitTile(this.activeUnit.gridX, this.activeUnit.gridZ);
-    const newPos = this.isometricBoard.tileToWorld(
-      this.activeUnit.gridX,
-      this.activeUnit.gridZ,
-      this.activeUnit.elevation
-    );
-    this.tacticalCamera.setFocus(newPos.x, newPos.y, newPos.z);
+      // Refocus active unit gold highlight and camera
+      this.isometricBoard.setActiveUnitTile(this.activeUnit.gridX, this.activeUnit.gridZ);
+      const newPos = this.isometricBoard.tileToWorld(
+        this.activeUnit.gridX,
+        this.activeUnit.gridZ,
+        this.activeUnit.elevation
+      );
+      this.tacticalCamera.setFocus(newPos.x, newPos.y, newPos.z);
 
-    this.tacticalHud.addLog(
-      `${this.activeUnit.name} moved to (${matchedPathEntry.x}, ${matchedPathEntry.z}).`,
-      'info'
-    );
+      this.tacticalHud.addLog(
+        `${this.activeUnit.name} moved to (${matchedPathEntry.x}, ${matchedPathEntry.z}).`,
+        'info'
+      );
 
-    // Check if there is a loot bag at the destination tile
-    if (this.stageUnitManager?.pickupLootBag) {
-      const loot = await this.stageUnitManager.pickupLootBag(this.activeUnit.x, this.activeUnit.z, this.activeUnit);
-      if (loot) {
-        const isPlayerClan = this.activeUnit.team === 'blue' || this.activeUnit.team === 'azure';
-        if (isPlayerClan) {
-          const orbsEarned = loot.orbs || 35;
-          this.playerOrbs += orbsEarned;
-          this.statsSummary.orbsWon += orbsEarned;
-          if (loot.item) {
-            this.playerInventory.unshift(loot.item);
+      // Check if there is a loot bag at the destination tile
+      if (this.stageUnitManager?.pickupLootBag) {
+        const loot = await this.stageUnitManager.pickupLootBag(this.activeUnit.x, this.activeUnit.z, this.activeUnit);
+        if (loot) {
+          const isPlayerClan = this.activeUnit.team === 'blue' || this.activeUnit.team === 'azure';
+          if (isPlayerClan) {
+            const orbsEarned = loot.orbs || 35;
+            this.playerOrbs += orbsEarned;
+            this.statsSummary.orbsWon += orbsEarned;
+            if (loot.item) {
+              this.playerInventory.unshift(loot.item);
+            }
+            const headAnchor = this.stageUnitManager.getUnitScreenAnchor(this.activeUnit.id, this.isometricBoard);
+            this.tacticalHud.spawnFloatingText(
+              headAnchor,
+              `✦ LOOT POUCH: +${orbsEarned} ORBS!`,
+              'orbs',
+              this.projectWorldToScreen
+            );
+            this.tacticalHud.addLog(
+              `✦ LOOT CLAIMED: ${this.activeUnit.name} picked up a Loot Pouch (+${orbsEarned} Orbs)!`,
+              'loot'
+            );
+            this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+            this._syncForgeRoster();
           }
-          const headAnchor = this.stageUnitManager.getUnitScreenAnchor(this.activeUnit.id, this.isometricBoard);
-          this.tacticalHud.spawnFloatingText(
-            headAnchor,
-            `✦ LOOT POUCH: +${orbsEarned} ORBS!`,
-            'orbs',
-            this.projectWorldToScreen
-          );
-          this.tacticalHud.addLog(
-            `✦ LOOT CLAIMED: ${this.activeUnit.name} picked up a Loot Pouch (+${orbsEarned} Orbs)!`,
-            'loot'
-          );
-          this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
-          this._syncForgeRoster();
         }
       }
-    }
 
-    // If unit has already acted, proceed to facing compass
-    if (this.activeUnit.hasActed) {
-      this.enterWaitMode();
-    } else {
-      this.enterCommandMenu();
+      // If unit has already acted, proceed to facing compass
+      if (this.activeUnit.hasActed) {
+        this.enterWaitMode();
+      } else {
+        this.enterCommandMenu();
+      }
+    } catch (err) {
+      console.error('[TacticsGame] player action error:', err);
+      if (this.matchId === currentMatchId) this.enterCommandMenu();
     }
   }
 
@@ -763,100 +769,105 @@ class TacticsGame {
     this.tacticalHud.setActiveUnit(attacker, 'animating');
     this.tacticalHud.setInspectedTarget(null, null, null);
 
-    // Before/during attack, evaluate FFTA Judge Law compliance
-    this._checkJudgeLaw(attacker, defender, forecast);
+    try {
+      // Before/during attack, evaluate FFTA Judge Law compliance
+      this._checkJudgeLaw(attacker, defender, forecast);
 
-    // Execute deterministic combat outcome
-    const outcome = executeCombatAction(attacker, defender, ability, this.isometricBoard);
-    outcome.reactionAnimation = outcome.defenderAnim;
-    outcome.critical = outcome.crit;
-    outcome.isHeal = outcome.heal > 0;
+      // Execute deterministic combat outcome
+      const outcome = executeCombatAction(attacker, defender, ability, this.isometricBoard);
+      outcome.reactionAnimation = outcome.defenderAnim;
+      outcome.critical = outcome.crit;
+      outcome.isHeal = outcome.heal > 0;
 
-    // Track combat telemetry
-    if (outcome.damage > 0) {
-      this.statsSummary.damageDealt += outcome.damage;
-    }
-    if (outcome.crit) {
-      this.statsSummary.crits++;
-    }
-
-    // Animate 3D weapon strike, projectile, and impact reaction
-    await this.stageUnitManager.animateCombatAction(
-      attacker,
-      defender,
-      forecast,
-      outcome,
-      this.isometricBoard
-    );
-    if (this.matchId !== currentMatchId) return;
-
-    // Spawn floating damage/heal/crit/orbs popups
-    const headAnchor = this.stageUnitManager.getUnitScreenAnchor(defender.id, this.isometricBoard);
-    if (outcome.heal > 0) {
-      this.tacticalHud.spawnFloatingText(headAnchor, outcome.heal, 'heal', this.projectWorldToScreen);
-      this.tacticalHud.addLog(
-        `${attacker.name} restored +${outcome.heal} HP to ${defender.name}.`,
-        'combat'
-      );
-    } else if (outcome.hit) {
-      const kind = outcome.crit ? 'crit' : 'damage';
-      this.tacticalHud.spawnFloatingText(headAnchor, outcome.damage, kind, this.projectWorldToScreen);
-
-      let combatMsg = `${attacker.name} struck ${defender.name} with ${ability.name} for ${outcome.damage} DMG`;
-      if (outcome.crit) combatMsg += ' [CRITICAL!]';
-      if (outcome.blocked) combatMsg += ' [SHIELD BLOCKED -65%]';
-      this.tacticalHud.addLog(combatMsg, 'combat');
-
-      if (outcome.defenderDead || (defender.hp !== undefined && defender.hp <= 0)) {
-        this.tacticalHud.addLog(`💀 ${defender.name} was defeated!`, 'combat');
-        const defX = defender.x ?? defender.gridX;
-        const defZ = defender.z ?? defender.gridZ;
-        const lootData = outcome.lootDrop || { orbs: 35, x: defX, z: defZ };
-        this.stageUnitManager.spawnLootBag?.(defX, defZ, this.isometricBoard, lootData);
-        this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${defX}, ${defZ})!`, 'loot');
+      // Track combat telemetry
+      if (outcome.damage > 0) {
+        this.statsSummary.damageDealt += outcome.damage;
       }
-    } else {
-      this.tacticalHud.spawnFloatingText(headAnchor, 'MISS', 'miss', this.projectWorldToScreen);
-      this.tacticalHud.addLog(`${attacker.name}'s attack missed ${defender.name}!`, 'combat');
-    }
+      if (outcome.crit) {
+        this.statsSummary.crits++;
+      }
 
-    // Apply status effects if triggered
-    if (outcome.statusApplied) {
-      defender.status = outcome.statusApplied;
-      this.stageUnitManager.setUnitStatus?.(defender.id, outcome.statusApplied);
-      const statusIcons = {
-        frozen: '❄️ FROZEN!',
-        sleeping: '💤 ASLEEP!',
-        confused: '💫 CONFUSED!',
-        float: '🪽 FLOAT!',
-        floating: '🪽 FLOAT!'
-      };
-      const statusText = statusIcons[outcome.statusApplied.toLowerCase()] || `⚡ ${outcome.statusApplied.toUpperCase()}!`;
-      this.tacticalHud.spawnFloatingText(headAnchor, statusText, 'crit', this.projectWorldToScreen);
-      this.tacticalHud.addLog(`✦ STATUS APPLIED: ${defender.name} is now ${statusText}`, 'combat');
-    }
-
-    // Award Set Orbs for combat
-    if (outcome.orbsEarned > 0) {
-      this.playerOrbs += outcome.orbsEarned;
-      this.statsSummary.orbsWon += outcome.orbsEarned;
-      this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
-      this.tacticalHud.spawnFloatingText(
-        headAnchor,
-        outcome.orbsEarned,
-        'orbs',
-        this.projectWorldToScreen
+      // Animate 3D weapon strike, projectile, and impact reaction
+      await this.stageUnitManager.animateCombatAction(
+        attacker,
+        defender,
+        forecast,
+        outcome,
+        this.isometricBoard
       );
-    }
+      if (this.matchId !== currentMatchId) return;
 
-    // Check if combat concluded the battle
-    if (this._checkBattleOutcome()) return;
+      // Spawn floating damage/heal/crit/orbs popups
+      const headAnchor = this.stageUnitManager.getUnitScreenAnchor(defender.id, this.isometricBoard);
+      if (outcome.heal > 0) {
+        this.tacticalHud.spawnFloatingText(headAnchor, outcome.heal, 'heal', this.projectWorldToScreen);
+        this.tacticalHud.addLog(
+          `${attacker.name} restored +${outcome.heal} HP to ${defender.name}.`,
+          'combat'
+        );
+      } else if (outcome.hit) {
+        const kind = outcome.crit ? 'crit' : 'damage';
+        this.tacticalHud.spawnFloatingText(headAnchor, outcome.damage, kind, this.projectWorldToScreen);
 
-    // If unit has already moved, proceed to facing compass
-    if (attacker.hasMoved) {
-      this.enterWaitMode();
-    } else {
-      this.enterCommandMenu();
+        let combatMsg = `${attacker.name} struck ${defender.name} with ${ability.name} for ${outcome.damage} DMG`;
+        if (outcome.crit) combatMsg += ' [CRITICAL!]';
+        if (outcome.blocked) combatMsg += ' [SHIELD BLOCKED -65%]';
+        this.tacticalHud.addLog(combatMsg, 'combat');
+
+        if (outcome.defenderDead || (defender.hp !== undefined && defender.hp <= 0)) {
+          this.tacticalHud.addLog(`💀 ${defender.name} was defeated!`, 'combat');
+          const defX = defender.x ?? defender.gridX;
+          const defZ = defender.z ?? defender.gridZ;
+          const lootData = outcome.lootDrop || { orbs: 35, x: defX, z: defZ };
+          this.stageUnitManager.spawnLootBag?.(defX, defZ, this.isometricBoard, lootData);
+          this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${defX}, ${defZ})!`, 'loot');
+        }
+      } else {
+        this.tacticalHud.spawnFloatingText(headAnchor, 'MISS', 'miss', this.projectWorldToScreen);
+        this.tacticalHud.addLog(`${attacker.name}'s attack missed ${defender.name}!`, 'combat');
+      }
+
+      // Apply status effects if triggered
+      if (outcome.statusApplied) {
+        defender.status = outcome.statusApplied;
+        this.stageUnitManager.setUnitStatus?.(defender.id, outcome.statusApplied);
+        const statusIcons = {
+          frozen: '❄️ FROZEN!',
+          sleeping: '💤 ASLEEP!',
+          confused: '💫 CONFUSED!',
+          float: '🪽 FLOAT!',
+          floating: '🪽 FLOAT!'
+        };
+        const statusText = statusIcons[outcome.statusApplied.toLowerCase()] || `⚡ ${outcome.statusApplied.toUpperCase()}!`;
+        this.tacticalHud.spawnFloatingText(headAnchor, statusText, 'crit', this.projectWorldToScreen);
+        this.tacticalHud.addLog(`✦ STATUS APPLIED: ${defender.name} is now ${statusText}`, 'combat');
+      }
+
+      // Award Set Orbs for combat
+      if (outcome.orbsEarned > 0) {
+        this.playerOrbs += outcome.orbsEarned;
+        this.statsSummary.orbsWon += outcome.orbsEarned;
+        this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+        this.tacticalHud.spawnFloatingText(
+          headAnchor,
+          outcome.orbsEarned,
+          'orbs',
+          this.projectWorldToScreen
+        );
+      }
+
+      // Check if combat concluded the battle
+      if (this._checkBattleOutcome()) return;
+
+      // If unit has already moved, proceed to facing compass
+      if (attacker.hasMoved) {
+        this.enterWaitMode();
+      } else {
+        this.enterCommandMenu();
+      }
+    } catch (err) {
+      console.error('[TacticsGame] player action error:', err);
+      if (this.matchId === currentMatchId) this.enterCommandMenu();
     }
   }
 
@@ -976,221 +987,254 @@ class TacticsGame {
   async _executeAITurn() {
     const currentMatchId = this.matchId;
     const aiUnit = this.activeUnit;
-    this.currentMode = 'animating';
-    this.tacticalHud.setActiveUnit(aiUnit, 'animating');
-    this.isometricBoard.clearHighlights();
+    let turnEnded = false;
 
-    // Compute tactical decision via high-level evaluation
-    const decision = this.turnManager.computeTacticalAI(
-      aiUnit,
-      this.units,
-      this.isometricBoard
-    );
+    try {
+      this.currentMode = 'animating';
+      this.tacticalHud.setActiveUnit(aiUnit, 'animating');
+      this.isometricBoard.clearHighlights();
 
-    // 1. Animate Movement if AI decided to reposition
-    if (decision.movePath && decision.movePath.length > 1) {
-      aiUnit.hasMoved = true;
-      await this.stageUnitManager.animateMovePath(
+      // Compute tactical decision via high-level evaluation
+      const decision = this.turnManager.computeTacticalAI(
         aiUnit,
-        decision.movePath,
+        this.units,
         this.isometricBoard
       );
-      if (this.matchId !== currentMatchId) return;
 
-      aiUnit.gridX = decision.moveTile.x;
-      aiUnit.gridZ = decision.moveTile.z;
-      aiUnit.x = decision.moveTile.x;
-      aiUnit.z = decision.moveTile.z;
-      aiUnit.elevation = decision.moveTile.elevation ?? aiUnit.elevation;
+      // 1. Animate Movement if AI decided to reposition
+      if (decision.movePath && decision.movePath.length > 1) {
+        aiUnit.hasMoved = true;
+        await this.stageUnitManager.animateMovePath(
+          aiUnit,
+          decision.movePath,
+          this.isometricBoard
+        );
+        if (this.matchId !== currentMatchId) return;
 
-      this.isometricBoard.setActiveUnitTile(aiUnit.gridX, aiUnit.gridZ);
-      const newPos = this.isometricBoard.tileToWorld(aiUnit.gridX, aiUnit.gridZ, aiUnit.elevation);
-      this.tacticalCamera.setFocus(newPos.x, newPos.y, newPos.z);
+        aiUnit.gridX = decision.moveTile.x;
+        aiUnit.gridZ = decision.moveTile.z;
+        aiUnit.x = decision.moveTile.x;
+        aiUnit.z = decision.moveTile.z;
+        aiUnit.elevation = decision.moveTile.elevation ?? aiUnit.elevation;
 
-      // Check if AI stepped on a loot bag
-      if (this.stageUnitManager?.pickupLootBag) {
-        const loot = await this.stageUnitManager.pickupLootBag(aiUnit.x, aiUnit.z, aiUnit);
-        if (loot) {
-          const isPlayerClan = aiUnit.team === 'blue' || aiUnit.team === 'azure';
-          if (isPlayerClan) {
-            const orbsEarned = loot.orbs || 35;
-            this.playerOrbs += orbsEarned;
-            this.statsSummary.orbsWon += orbsEarned;
-            if (loot.item) {
-              this.playerInventory.unshift(loot.item);
+        this.isometricBoard.setActiveUnitTile(aiUnit.gridX, aiUnit.gridZ);
+        const newPos = this.isometricBoard.tileToWorld(aiUnit.gridX, aiUnit.gridZ, aiUnit.elevation);
+        this.tacticalCamera.setFocus(newPos.x, newPos.y, newPos.z);
+
+        // Check if AI stepped on a loot bag
+        if (this.stageUnitManager?.pickupLootBag) {
+          const loot = await this.stageUnitManager.pickupLootBag(aiUnit.x, aiUnit.z, aiUnit);
+          if (loot) {
+            const isPlayerClan = aiUnit.team === 'blue' || aiUnit.team === 'azure';
+            if (isPlayerClan) {
+              const orbsEarned = loot.orbs || 35;
+              this.playerOrbs += orbsEarned;
+              this.statsSummary.orbsWon += orbsEarned;
+              if (loot.item) {
+                this.playerInventory.unshift(loot.item);
+              }
+              const headAnchor = this.stageUnitManager.getUnitScreenAnchor(aiUnit.id, this.isometricBoard);
+              this.tacticalHud.spawnFloatingText(
+                headAnchor,
+                `✦ LOOT POUCH: +${orbsEarned} ORBS!`,
+                'orbs',
+                this.projectWorldToScreen
+              );
+              this.tacticalHud.addLog(
+                `✦ LOOT CLAIMED: ${aiUnit.name} picked up a Loot Pouch (+${orbsEarned} Orbs)!`,
+                'loot'
+              );
+              this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+              this._syncForgeRoster();
+            } else {
+              this.tacticalHud.addLog(`☠ Loot bag seized by enemy ${aiUnit.name}!`, 'combat');
             }
-            const headAnchor = this.stageUnitManager.getUnitScreenAnchor(aiUnit.id, this.isometricBoard);
-            this.tacticalHud.spawnFloatingText(
-              headAnchor,
-              `✦ LOOT POUCH: +${orbsEarned} ORBS!`,
-              'orbs',
-              this.projectWorldToScreen
-            );
-            this.tacticalHud.addLog(
-              `✦ LOOT CLAIMED: ${aiUnit.name} picked up a Loot Pouch (+${orbsEarned} Orbs)!`,
-              'loot'
-            );
-            this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
-            this._syncForgeRoster();
-          } else {
-            this.tacticalHud.addLog(`☠ Loot bag seized by enemy ${aiUnit.name}!`, 'combat');
           }
         }
       }
-    }
 
-    // Short readable tactical pause
-    await this._sleep(350);
-    if (this.matchId !== currentMatchId) return;
-
-    // 2. Animate Combat Strike if target was in range
-    if (decision.ability && decision.targetUnit) {
-      aiUnit.hasActed = true;
-      const target = decision.targetUnit;
-      const ability = decision.ability;
-
-      const rawForecast = calculateCombatForecast(
-        aiUnit,
-        target,
-        ability,
-        this.isometricBoard
-      );
-      const forecast = {
-        ...rawForecast,
-        attacker: aiUnit,
-        defender: target,
-        ability,
-        abilityName: ability.name,
-        damage: rawForecast.expectedDamage,
-        hitRate: rawForecast.hitChance,
-        critRate: rawForecast.critChance,
-        stance:
-          rawForecast.stance === 'High'
-            ? 'HIGH (+15%)'
-            : rawForecast.stance === 'Low'
-            ? 'LOW (-15%)'
-            : 'MID',
-        angle:
-          rawForecast.attackAngle === 'Back'
-            ? 'BACKSTAB +30%!'
-            : rawForecast.attackAngle === 'Side'
-            ? 'SIDE +15%'
-            : 'FRONT'
-      };
-
-      this.tacticalHud.setInspectedTarget(target, null, forecast);
-      await this._sleep(400);
+      // Short readable tactical pause
+      await this._sleep(350);
       if (this.matchId !== currentMatchId) return;
 
-      // Check Judge Law compliance for AI combat
-      this._checkJudgeLaw(aiUnit, target, forecast);
+      // 2. Animate Combat Strike if target was in range
+      if (decision.ability && decision.targetUnit) {
+        aiUnit.hasActed = true;
+        const target = decision.targetUnit;
+        const ability = decision.ability;
 
-      const outcome = executeCombatAction(aiUnit, target, ability, this.isometricBoard);
-      outcome.reactionAnimation = outcome.defenderAnim;
-      outcome.critical = outcome.crit;
-      outcome.isHeal = outcome.heal > 0;
-
-      // Status effects applied by AI
-      if (outcome.statusApplied) {
-        target.status = outcome.statusApplied;
-        this.stageUnitManager.setUnitStatus?.(target.id, outcome.statusApplied);
-        const statusIcons = {
-          frozen: '❄️ FROZEN!',
-          sleeping: '💤 ASLEEP!',
-          confused: '💫 CONFUSED!',
-          float: '🪽 FLOAT!',
-          floating: '🪽 FLOAT!'
+        const rawForecast = calculateCombatForecast(
+          aiUnit,
+          target,
+          ability,
+          this.isometricBoard
+        );
+        const forecast = {
+          ...rawForecast,
+          attacker: aiUnit,
+          defender: target,
+          ability,
+          abilityName: ability.name,
+          damage: rawForecast.expectedDamage,
+          hitRate: rawForecast.hitChance,
+          critRate: rawForecast.critChance,
+          stance:
+            rawForecast.stance === 'High'
+              ? 'HIGH (+15%)'
+              : rawForecast.stance === 'Low'
+              ? 'LOW (-15%)'
+              : 'MID',
+          angle:
+            rawForecast.attackAngle === 'Back'
+              ? 'BACKSTAB +30%!'
+              : rawForecast.attackAngle === 'Side'
+              ? 'SIDE +15%'
+              : 'FRONT'
         };
-        const statusText = statusIcons[outcome.statusApplied.toLowerCase()] || `⚡ ${outcome.statusApplied.toUpperCase()}!`;
-        const headAnchor = this.stageUnitManager.getUnitScreenAnchor(target.id, this.isometricBoard);
-        this.tacticalHud.spawnFloatingText(headAnchor, statusText, 'crit', this.projectWorldToScreen);
-        this.tacticalHud.addLog(`✦ STATUS APPLIED: ${target.name} is now ${statusText}`, 'combat');
-      }
 
-      await this.stageUnitManager.animateCombatAction(
-        aiUnit,
-        target,
-        forecast,
-        outcome,
-        this.isometricBoard
-      );
-      if (this.matchId !== currentMatchId) return;
+        this.tacticalHud.setInspectedTarget(target, null, forecast);
+        await this._sleep(400);
+        if (this.matchId !== currentMatchId) return;
 
-      const headAnchor = this.stageUnitManager.getUnitScreenAnchor(
-        target.id,
-        this.isometricBoard
-      );
-      if (outcome.heal > 0) {
-        this.tacticalHud.spawnFloatingText(
-          headAnchor,
-          outcome.heal,
-          'heal',
-          this.projectWorldToScreen
-        );
-        this.tacticalHud.addLog(
-          `${aiUnit.name} healed ${target.name} for +${outcome.heal} HP.`,
-          'combat'
-        );
-      } else if (outcome.hit) {
-        const kind = outcome.crit ? 'crit' : 'damage';
-        this.tacticalHud.spawnFloatingText(
-          headAnchor,
-          outcome.damage,
-          kind,
-          this.projectWorldToScreen
-        );
-        let msg = `${aiUnit.name} struck ${target.name} for ${outcome.damage} DMG`;
-        if (outcome.crit) msg += ' [CRITICAL!]';
-        this.tacticalHud.addLog(msg, 'combat');
+        // Check Judge Law compliance for AI combat
+        this._checkJudgeLaw(aiUnit, target, forecast);
 
-        if (outcome.defenderDead || (target.hp !== undefined && target.hp <= 0)) {
-          this.tacticalHud.addLog(`💀 ${target.name} fell in combat!`, 'combat');
-          const tgtX = target.x ?? target.gridX;
-          const tgtZ = target.z ?? target.gridZ;
-          const lootData = outcome.lootDrop || { orbs: 35, x: tgtX, z: tgtZ };
-          this.stageUnitManager.spawnLootBag?.(tgtX, tgtZ, this.isometricBoard, lootData);
-          this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${tgtX}, ${tgtZ})!`, 'loot');
+        const outcome = executeCombatAction(aiUnit, target, ability, this.isometricBoard);
+        outcome.reactionAnimation = outcome.defenderAnim;
+        outcome.critical = outcome.crit;
+        outcome.isHeal = outcome.heal > 0;
+
+        // Status effects applied by AI
+        if (outcome.statusApplied) {
+          target.status = outcome.statusApplied;
+          this.stageUnitManager.setUnitStatus?.(target.id, outcome.statusApplied);
+          const statusIcons = {
+            frozen: '❄️ FROZEN!',
+            sleeping: '💤 ASLEEP!',
+            confused: '💫 CONFUSED!',
+            float: '🪽 FLOAT!',
+            floating: '🪽 FLOAT!'
+          };
+          const statusText = statusIcons[outcome.statusApplied.toLowerCase()] || `⚡ ${outcome.statusApplied.toUpperCase()}!`;
+          const headAnchor = this.stageUnitManager.getUnitScreenAnchor(target.id, this.isometricBoard);
+          this.tacticalHud.spawnFloatingText(headAnchor, statusText, 'crit', this.projectWorldToScreen);
+          this.tacticalHud.addLog(`✦ STATUS APPLIED: ${target.name} is now ${statusText}`, 'combat');
         }
-      } else {
-        this.tacticalHud.spawnFloatingText(
-          headAnchor,
-          'MISS',
-          'miss',
-          this.projectWorldToScreen
+
+        await this.stageUnitManager.animateCombatAction(
+          aiUnit,
+          target,
+          forecast,
+          outcome,
+          this.isometricBoard
         );
-        this.tacticalHud.addLog(`${aiUnit.name}'s attack missed!`, 'combat');
+        if (this.matchId !== currentMatchId) return;
+
+        const headAnchor = this.stageUnitManager.getUnitScreenAnchor(
+          target.id,
+          this.isometricBoard
+        );
+        if (outcome.heal > 0) {
+          this.tacticalHud.spawnFloatingText(
+            headAnchor,
+            outcome.heal,
+            'heal',
+            this.projectWorldToScreen
+          );
+          this.tacticalHud.addLog(
+            `${aiUnit.name} healed ${target.name} for +${outcome.heal} HP.`,
+            'combat'
+          );
+        } else if (outcome.hit) {
+          const kind = outcome.crit ? 'crit' : 'damage';
+          this.tacticalHud.spawnFloatingText(
+            headAnchor,
+            outcome.damage,
+            kind,
+            this.projectWorldToScreen
+          );
+          let msg = `${aiUnit.name} struck ${target.name} for ${outcome.damage} DMG`;
+          if (outcome.crit) msg += ' [CRITICAL!]';
+          this.tacticalHud.addLog(msg, 'combat');
+
+          if (outcome.defenderDead || (target.hp !== undefined && target.hp <= 0)) {
+            this.tacticalHud.addLog(`💀 ${target.name} fell in combat!`, 'combat');
+            const tgtX = target.x ?? target.gridX;
+            const tgtZ = target.z ?? target.gridZ;
+            const lootData = outcome.lootDrop || { orbs: 35, x: tgtX, z: tgtZ };
+            this.stageUnitManager.spawnLootBag?.(tgtX, tgtZ, this.isometricBoard, lootData);
+            this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${tgtX}, ${tgtZ})!`, 'loot');
+          }
+        } else {
+          this.tacticalHud.spawnFloatingText(
+            headAnchor,
+            'MISS',
+            'miss',
+            this.projectWorldToScreen
+          );
+          this.tacticalHud.addLog(`${aiUnit.name}'s attack missed!`, 'combat');
+        }
+
+        this.tacticalHud.setInspectedTarget(null, null, null);
       }
 
-      this.tacticalHud.setInspectedTarget(null, null, null);
-    }
-
-    // 3. Finalize AI Facing and Deduct CT
-    if (decision.endFacing) {
-      aiUnit.facing = decision.endFacing;
-      const actor = this.stageUnitManager.units.get(aiUnit.id);
-      if (actor && actor.sprite) {
-        actor.sprite.setFacing(decision.endFacing);
+      // 3. Finalize AI Facing and Deduct CT
+      if (decision.endFacing) {
+        aiUnit.facing = decision.endFacing;
+        const actor = this.stageUnitManager.units.get(aiUnit.id);
+        if (actor && actor.sprite) {
+          actor.sprite.setFacing(decision.endFacing);
+        }
       }
-    }
 
-    this.turnManager.endTurn(aiUnit, aiUnit.hasMoved, aiUnit.hasActed);
-    this.isometricBoard.setActiveUnitTile(null, null);
+      this.turnManager.endTurn(aiUnit, aiUnit.hasMoved, aiUnit.hasActed);
+      turnEnded = true;
+      this.isometricBoard.setActiveUnitTile(null, null);
 
-    // Check if AI turn ended the battle
-    if (this._checkBattleOutcome()) {
-      this._isProcessingTurn = false;
-      return;
-    }
+      // Check if AI turn ended the battle
+      if (this._checkBattleOutcome()) {
+        this._isProcessingTurn = false;
+        return;
+      }
 
-    await this._sleep(250);
-    if (this.matchId !== currentMatchId) return;
-    // Unwind call stack before proceeding to next turn
-    this._isProcessingTurn = false;
-    if (this._turnTimer) clearTimeout(this._turnTimer);
-    this._turnTimer = setTimeout(() => {
+      await this._sleep(250);
       if (this.matchId !== currentMatchId) return;
-      this.advanceTurn();
-    }, 80);
+      // Unwind call stack before proceeding to next turn
+      this._isProcessingTurn = false;
+      if (this._turnTimer) clearTimeout(this._turnTimer);
+      this._turnTimer = setTimeout(() => {
+        if (this.matchId !== currentMatchId) return;
+        this.advanceTurn();
+      }, 80);
+    } catch (err) {
+      console.error('[TacticsGame] _executeAITurn error:', err);
+      if (this.matchId === currentMatchId) {
+        if (!turnEnded && aiUnit) {
+          this.turnManager.endTurn(aiUnit, !!aiUnit.hasMoved, !!aiUnit.hasActed);
+          turnEnded = true;
+        }
+        const actor = this.stageUnitManager?.units?.get(aiUnit?.id);
+        if (actor?.sprite) {
+          actor.sprite.play('Idle', performance.now() / 1000);
+        }
+        this.isometricBoard?.setActiveUnitTile(null, null);
+        this.currentMode = 'standby';
+        this._isProcessingTurn = false;
+        if (!this._checkBattleOutcome()) {
+          if (this._turnTimer) clearTimeout(this._turnTimer);
+          this._turnTimer = setTimeout(() => {
+            if (this.matchId !== currentMatchId) return;
+            this.advanceTurn();
+          }, 80);
+        }
+      }
+    } finally {
+      if (this.matchId === currentMatchId && !turnEnded && aiUnit) {
+        this.turnManager.endTurn(aiUnit, !!aiUnit.hasMoved, !!aiUnit.hasActed);
+        turnEnded = true;
+      }
+      this._isProcessingTurn = false;
+    }
   }
 
   /* ========================================================================

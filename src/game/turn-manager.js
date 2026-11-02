@@ -242,15 +242,6 @@ export class TurnManager {
     this.turnCount++;
     this.activeLaw = this._getLawForTurn(this.turnCount);
 
-    // When a unit reaches 100 CT to start its turn, if frozen or sleeping, decrement statusTurns.
-    // If statusTurns <= 0, clear unit.status = null.
-    if (activeUnit.status === 'frozen' || activeUnit.status === 'sleeping') {
-      activeUnit.statusTurns = (activeUnit.statusTurns || 1) - 1;
-      if (activeUnit.statusTurns <= 0) {
-        activeUnit.status = null;
-      }
-    }
-
     return {
       activeUnit,
       ticksElapsed,
@@ -271,6 +262,13 @@ export class TurnManager {
     if (acted) ctCost += 20;
 
     unit.ct = Math.max(0, (unit.ct || this.ctThreshold) - ctCost);
+
+    if (unit.status === 'frozen' || unit.status === 'sleeping') {
+      unit.statusTurns = (unit.statusTurns || 1) - 1;
+      if (unit.statusTurns <= 0) {
+        unit.status = null;
+      }
+    }
 
     if (this.activeUnit === unit) {
       this.activeUnit = null;
@@ -606,30 +604,107 @@ export class TurnManager {
       }
     }
 
-    let bestApproachTile = reachableTiles[0];
-    let minApproachDist = Infinity;
+    // Multi-source BFS distance map across board starting from all living enemy positions
+    const maxJump = aiUnit.jump || 2;
+    const bfsDistMap = new Map();
+    const queue = [];
 
-    for (const tile of reachableTiles) {
-      const dist = Math.abs(tile.x - nearestEnemy.gridX) + Math.abs(tile.z - nearestEnemy.gridZ);
-      if (dist < minApproachDist) {
-        minApproachDist = dist;
-        bestApproachTile = tile;
-      } else if (dist === minApproachDist) {
-        // Tie-breaker: prefer higher elevation or tile with lower movement cost
-        if ((tile.elevation ?? 0) > (bestApproachTile.elevation ?? 0)) {
-          bestApproachTile = tile;
-        }
+    for (const enemy of enemies) {
+      const key = `${enemy.gridX},${enemy.gridZ}`;
+      if (!bfsDistMap.has(key)) {
+        bfsDistMap.set(key, 0);
+        queue.push({ x: enemy.gridX, z: enemy.gridZ, dist: 0 });
       }
     }
 
-    const endFacing = calculateFacing(bestApproachTile, {
-      x: nearestEnemy.gridX,
-      z: nearestEnemy.gridZ
-    });
+    const cardinalDirs = [
+      { dx: 1, dz: 0 },
+      { dx: -1, dz: 0 },
+      { dx: 0, dz: 1 },
+      { dx: 0, dz: -1 }
+    ];
+
+    while (queue.length > 0) {
+      const cur = queue.shift();
+      const curTile = board?.getTile?.(cur.x, cur.z);
+      const curElev = curTile?.elevation ?? 0;
+
+      for (const dir of cardinalDirs) {
+        const nx = cur.x + dir.dx;
+        const nz = cur.z + dir.dz;
+        const key = `${nx},${nz}`;
+        if (bfsDistMap.has(key)) continue;
+
+        const nextTile = board?.getTile?.(nx, nz);
+        if (!nextTile) continue;
+        if (nextTile.passable === false) continue;
+
+        const nextElev = nextTile.elevation ?? 0;
+        if (Math.abs(nextElev - curElev) > maxJump) continue;
+
+        const nextDist = cur.dist + 1;
+        bfsDistMap.set(key, nextDist);
+        queue.push({ x: nx, z: nz, dist: nextDist });
+      }
+    }
+
+    let bestApproachTile = reachableTiles[0] || {
+      x: aiUnit.gridX,
+      z: aiUnit.gridZ,
+      elevation: aiUnit.elevation ?? 0
+    };
+    let minBfsDist = bfsDistMap.has(`${bestApproachTile.x},${bestApproachTile.z}`)
+      ? bfsDistMap.get(`${bestApproachTile.x},${bestApproachTile.z}`)
+      : Infinity;
+    let minApproachDist = nearestEnemy
+      ? Math.abs(bestApproachTile.x - nearestEnemy.gridX) + Math.abs(bestApproachTile.z - nearestEnemy.gridZ)
+      : Infinity;
+
+    for (const tile of reachableTiles) {
+      const tileKey = `${tile.x},${tile.z}`;
+      const bfsDist = bfsDistMap.has(tileKey) ? bfsDistMap.get(tileKey) : Infinity;
+      const manhattanDist = nearestEnemy
+        ? Math.abs(tile.x - nearestEnemy.gridX) + Math.abs(tile.z - nearestEnemy.gridZ)
+        : 0;
+
+      let isBetter = false;
+      if (bfsDist < minBfsDist) {
+        isBetter = true;
+      } else if (bfsDist === minBfsDist) {
+        if (manhattanDist < minApproachDist) {
+          isBetter = true;
+        } else if (manhattanDist === minApproachDist) {
+          // Prefer moving closer over staying still
+          const bestIsCurrent = (bestApproachTile.x === aiUnit.gridX && bestApproachTile.z === aiUnit.gridZ);
+          const tileIsCurrent = (tile.x === aiUnit.gridX && tile.z === aiUnit.gridZ);
+          if (bestIsCurrent && !tileIsCurrent) {
+            isBetter = true;
+          } else if (!tileIsCurrent && (tile.elevation ?? 0) > (bestApproachTile.elevation ?? 0)) {
+            isBetter = true;
+          }
+        }
+      }
+
+      if (isBetter) {
+        minBfsDist = bfsDist;
+        minApproachDist = manhattanDist;
+        bestApproachTile = tile;
+      }
+    }
+
+    const isStayingStill = (bestApproachTile.x === aiUnit.gridX && bestApproachTile.z === aiUnit.gridZ);
+    const movePath = isStayingStill ? [] : (bestApproachTile.path || []);
+
+    const endFacing = nearestEnemy
+      ? calculateFacing(bestApproachTile, {
+          x: nearestEnemy.gridX,
+          z: nearestEnemy.gridZ
+        })
+      : (aiUnit.facing || 'SE');
 
     return {
       moveTile: bestApproachTile,
-      movePath: bestApproachTile.path || [],
+      movePath,
       ability: null,
       targetUnit: null,
       endFacing: endFacing || 'SE',
