@@ -49,6 +49,7 @@ class TacticsGame {
     this.autoBattle = false;
     this.battleOver = false;
     this.turnCount = 1;
+    this._isProcessingTurn = false;
     this.statsSummary = {
       turns: 0,
       damageDealt: 0,
@@ -74,9 +75,12 @@ class TacticsGame {
         name: 'Mythril Broadsword',
         type: 'weapon',
         grade: 'B',
+        tier: 'B',
+        tierGrade: 'B',
         orbValue: 125,
         material: 'Mythril Steel',
         statsBonus: '+12 STR, +4 VIT',
+        rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Mythril Broadsword', slot: 'tool' },
         equippedTo: 'unit_blue_0'
       },
       {
@@ -84,9 +88,12 @@ class TacticsGame {
         name: 'Composite Longbow',
         type: 'weapon',
         grade: 'B',
+        tier: 'B',
+        tierGrade: 'B',
         orbValue: 125,
         material: 'Ironwood & Mythril',
         statsBonus: '+14 DEX, +6 AGI',
+        rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Composite Longbow', slot: 'tool' },
         equippedTo: 'unit_blue_1'
       },
       {
@@ -94,9 +101,12 @@ class TacticsGame {
         name: 'Arcane Focus Rod',
         type: 'weapon',
         grade: 'A',
+        tier: 'A',
+        tierGrade: 'A',
         orbValue: 625,
         material: 'Starlight Crystal',
         statsBonus: '+22 INT, +10 WIS',
+        rawItem: { tier: 'A', tierGrade: 'A', orbValue: 625, name: 'Arcane Focus Rod', slot: 'tool' },
         equippedTo: 'unit_blue_2'
       },
       {
@@ -104,9 +114,12 @@ class TacticsGame {
         name: 'Obsidian Dirk',
         type: 'weapon',
         grade: 'C',
+        tier: 'C',
+        tierGrade: 'C',
         orbValue: 25,
         material: 'Obsidian Glass',
         statsBonus: '+6 DEX, +4 LUK',
+        rawItem: { tier: 'C', tierGrade: 'C', orbValue: 25, name: 'Obsidian Dirk', slot: 'tool' },
         equippedTo: 'unit_blue_3'
       },
       {
@@ -114,9 +127,12 @@ class TacticsGame {
         name: 'Tower Aegis Shield',
         type: 'armor',
         grade: 'B',
+        tier: 'B',
+        tierGrade: 'B',
         orbValue: 125,
         material: 'Tempered Mythril',
         statsBonus: '+18 DEF, +8 VIT',
+        rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Tower Aegis Shield', slot: 'chest' },
         equippedTo: null
       }
     ];
@@ -126,6 +142,7 @@ class TacticsGame {
     this._initScene();
     this._initLighting();
     this._initManagers();
+    this.hud = this.tacticalHud; // Convenient alias
     this._initEventListeners();
 
     // Start lifecycle
@@ -248,6 +265,7 @@ class TacticsGame {
 
   async setupBattlefield(seed) {
     this.battleOver = false;
+    this._isProcessingTurn = false;
     this.turnCount = 1;
     this.baseSeed = (seed >>> 0);
 
@@ -293,6 +311,12 @@ class TacticsGame {
       turnNumber: this.turnCount
     });
 
+    // Update active law banner if Judge Law system exists
+    const activeLaw = this.turnManager.getActiveLaw?.();
+    if (activeLaw) {
+      this.tacticalHud.updateLawBanner?.(activeLaw);
+    }
+
     this.tacticalHud.addLog(
       `BATTLEFIELD SEED 0x${this.baseSeed.toString(16).toUpperCase()} READY // Azure Clan vs Crimson Order.`,
       'system'
@@ -337,59 +361,78 @@ class TacticsGame {
 
   async advanceTurn() {
     if (this.battleOver) return;
+    if (this._isProcessingTurn) return;
+    this._isProcessingTurn = true;
 
-    // Check if battle has already ended
-    if (this._checkBattleOutcome()) return;
+    try {
+      // Check if battle has already ended
+      if (this._checkBattleOutcome()) {
+        this._isProcessingTurn = false;
+        return;
+      }
 
-    // Advance CT clock to next ready unit
-    const nextResult = this.turnManager.nextTurn(this.units);
-    this.activeUnit = nextResult.activeUnit;
+      // Check and update active Judge Law
+      const activeLaw = this.turnManager.getActiveLaw?.();
+      if (activeLaw) {
+        this.tacticalHud.updateLawBanner?.(activeLaw);
+        this.hud?.updateLawBanner?.(activeLaw);
+      }
 
-    if (!this.activeUnit) {
-      console.warn('[TacticsGame] No living units ready for next turn.');
-      return;
-    }
+      // Advance CT clock to next ready unit
+      const nextResult = this.turnManager.nextTurn(this.units);
+      this.activeUnit = nextResult.activeUnit;
 
-    this.turnCount++;
-    this.activeUnit.hasMoved = false;
-    this.activeUnit.hasActed = false;
+      if (!this.activeUnit) {
+        console.warn('[TacticsGame] No living units ready for next turn.');
+        this._isProcessingTurn = false;
+        return;
+      }
 
-    // Pan camera to focus on active unit
-    const unitWorldPos = this.isometricBoard.tileToWorld(
-      this.activeUnit.gridX,
-      this.activeUnit.gridZ,
-      this.activeUnit.elevation
-    );
-    this.tacticalCamera.setFocus(unitWorldPos.x, unitWorldPos.y, unitWorldPos.z);
+      this.turnCount++;
+      this.activeUnit.hasMoved = false;
+      this.activeUnit.hasActed = false;
 
-    // Highlight active unit tile with pulsing gold border
-    this.isometricBoard.setActiveUnitTile(this.activeUnit.gridX, this.activeUnit.gridZ);
+      // Pan camera to focus on active unit
+      const unitWorldPos = this.isometricBoard.tileToWorld(
+        this.activeUnit.gridX,
+        this.activeUnit.gridZ,
+        this.activeUnit.elevation
+      );
+      this.tacticalCamera.setFocus(unitWorldPos.x, unitWorldPos.y, unitWorldPos.z);
 
-    // Update HUD
-    this.tacticalHud.setHeaderState({
-      turnNumber: this.turnCount,
-      orbs: this.playerOrbs
-    });
-    this.tacticalHud.updateTurnQueue(
-      this.turnManager.getTurnQueuePreview(this.units, 8),
-      this.activeUnit
-    );
-    this.tacticalHud.setInspectedTarget(null, null, null);
+      // Highlight active unit tile with pulsing gold border
+      this.isometricBoard.setActiveUnitTile(this.activeUnit.gridX, this.activeUnit.gridZ);
 
-    const isPlayerClan = this.activeUnit.team === 'blue';
-    const isAuto = this.autoBattle || !isPlayerClan;
+      // Update HUD
+      this.tacticalHud.setHeaderState({
+        turnNumber: this.turnCount,
+        orbs: this.playerOrbs
+      });
+      this.tacticalHud.updateTurnQueue(
+        this.turnManager.getTurnQueuePreview(this.units, 8),
+        this.activeUnit
+      );
+      this.tacticalHud.setInspectedTarget(null, null, null);
 
-    this.tacticalHud.addLog(
-      `✦ TURN ${this.turnCount} [${this.activeUnit.team.toUpperCase()}]: ${this.activeUnit.name} ready (CT ${this.activeUnit.ct}).`,
-      'info'
-    );
+      const isPlayerClan = this.activeUnit.team === 'blue' || this.activeUnit.team === 'azure';
+      const isAuto = this.autoBattle || !isPlayerClan;
 
-    if (isAuto) {
-      // AI Controlled Turn (Crimson Order or Auto-Battle Azure)
-      await this._executeAITurn();
-    } else {
-      // Player Interactive Turn
-      this.enterCommandMenu();
+      this.tacticalHud.addLog(
+        `✦ TURN ${this.turnCount} [${this.activeUnit.team.toUpperCase()}]: ${this.activeUnit.name} ready (CT ${this.activeUnit.ct}).`,
+        'info'
+      );
+
+      if (isAuto) {
+        // AI Controlled Turn (Crimson Order or Auto-Battle Azure)
+        await this._executeAITurn();
+      } else {
+        // Player Interactive Turn - release lock so player can take actions
+        this._isProcessingTurn = false;
+        this.enterCommandMenu();
+      }
+    } catch (err) {
+      console.error('[TacticsGame] advanceTurn error:', err);
+      this._isProcessingTurn = false;
     }
   }
 
@@ -562,6 +605,9 @@ class TacticsGame {
     this.tacticalHud.setActiveUnit(attacker, 'animating');
     this.tacticalHud.setInspectedTarget(null, null, null);
 
+    // Before/during attack, evaluate FFTA Judge Law compliance
+    this._checkJudgeLaw(attacker, defender, forecast);
+
     // Execute deterministic combat outcome
     const outcome = executeCombatAction(attacker, defender, ability, this.isometricBoard);
     outcome.reactionAnimation = outcome.defenderAnim;
@@ -634,6 +680,48 @@ class TacticsGame {
     }
   }
 
+  executeAttack(attacker, defender, ability) {
+    if (attacker) this.activeUnit = attacker;
+    if (defender) this.inspectedTarget = defender;
+    if (ability) this.selectedAbility = ability;
+    return this.confirmCombatAction();
+  }
+
+  _checkJudgeLaw(attacker, defender, forecast) {
+    if (!this.turnManager?.evaluateLawCompliance) return null;
+
+    const isBackstab = !!(forecast?.isBackstab || forecast?.attackAngle === 'Back');
+    const distance = Math.abs(attacker.gridX - defender.gridX) + Math.abs(attacker.gridZ - defender.gridZ);
+    const heightDelta = (attacker.elevation || 0) - (defender.elevation || 0);
+    const weaponModel = attacker.heldModelName || attacker.weapon?.heldModelName || attacker.weaponType || 'sword';
+
+    const result = this.turnManager.evaluateLawCompliance(attacker, defender, {
+      isBackstab,
+      distance,
+      heightDelta,
+      weaponModel
+    });
+
+    if (result && (result.violated || result.penalty)) {
+      const lawName = result.lawName || result.law?.name || 'Judge Law';
+      const reason = result.reason || 'Forbidden Action';
+      this.tacticalHud.addLog(
+        `⚖️ JUDGE YELLOW CARD! ${attacker.name} violated ${lawName} (${reason})!`,
+        'combat'
+      );
+
+      // Deduct 1 Set Orb and apply CT penalty
+      this.playerOrbs = Math.max(0, this.playerOrbs - 1);
+      attacker.ct = Math.max(0, (attacker.ct || 100) - 20);
+      this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+
+      const anchor = this.stageUnitManager.getUnitScreenAnchor(attacker.id, this.isometricBoard);
+      this.tacticalHud.spawnFloatingText(anchor, 'JUDGE: YELLOW CARD!', 'crit', this.projectWorldToScreen);
+    }
+
+    return result;
+  }
+
   enterWaitMode() {
     if (!this.activeUnit || this.currentMode === 'animating') return;
 
@@ -680,8 +768,10 @@ class TacticsGame {
     this.isometricBoard.clearHighlights();
     this.isometricBoard.setActiveUnitTile(null, null);
 
-    // Proceed to next CT turn
-    this.advanceTurn();
+    // Schedule next turn asynchronously to unwind promise call stack
+    setTimeout(() => {
+      this.advanceTurn();
+    }, 80);
   }
 
   cancelCurrentMode() {
@@ -774,6 +864,9 @@ class TacticsGame {
       this.tacticalHud.setInspectedTarget(target, null, forecast);
       await this._sleep(400);
 
+      // Check Judge Law compliance for AI combat
+      this._checkJudgeLaw(aiUnit, target, forecast);
+
       const outcome = executeCombatAction(aiUnit, target, ability, this.isometricBoard);
       outcome.reactionAnimation = outcome.defenderAnim;
       outcome.critical = outcome.crit;
@@ -843,10 +936,17 @@ class TacticsGame {
     this.isometricBoard.setActiveUnitTile(null, null);
 
     // Check if AI turn ended the battle
-    if (this._checkBattleOutcome()) return;
+    if (this._checkBattleOutcome()) {
+      this._isProcessingTurn = false;
+      return;
+    }
 
     await this._sleep(250);
-    this.advanceTurn();
+    // Unwind call stack before proceeding to next turn
+    this._isProcessingTurn = false;
+    setTimeout(() => {
+      this.advanceTurn();
+    }, 80);
   }
 
   /* ========================================================================
@@ -907,6 +1007,7 @@ class TacticsGame {
   async handleCraftItem(orbs) {
     try {
       const craftResult = await craftItem(orbs, deriveSeed(this.baseSeed, Date.now()));
+      const grade = craftResult.item.tierGrade || craftResult.item.tier || 'C';
       const forgedItem = {
         id: `item-${Date.now()}`,
         name: craftResult.item.name,
@@ -916,7 +1017,9 @@ class TacticsGame {
             : craftResult.item.slot === 'chest' || craftResult.item.slot === 'head'
             ? 'armor'
             : 'weapon',
-        grade: craftResult.item.tierGrade || 'C',
+        grade: grade,
+        tier: grade,
+        tierGrade: grade,
         orbValue: craftResult.item.orbValue || orbs,
         material: craftResult.item.material?.name || 'Mythril Steel',
         statsBonus: `Score ${craftResult.item.score} // ${craftResult.item.props?.[0]?.name || 'Refined'}`,
@@ -926,7 +1029,7 @@ class TacticsGame {
 
       const receipt = {
         candidateRolls: craftResult.rolls,
-        tierGrade: craftResult.item.tierGrade || 'C',
+        tierGrade: grade,
         score: craftResult.item.score,
         orbValue: orbs,
         material: craftResult.item.material?.name || 'Mythril Steel',
@@ -943,20 +1046,38 @@ class TacticsGame {
         'loot'
       );
 
-      return { item: forgedItem, receipt };
+      return { item: forgedItem, receipt, remainingOrbs: this.playerOrbs };
     } catch (err) {
       console.error('[TacticsGame] handleCraftItem error:', err);
       return null;
     }
   }
 
-  handleSalvageItem(index, yieldOrbs) {
-    const item = this.playerInventory[index];
+  handleSalvageItem(itemOrIndex, yieldOrbs) {
+    let item = null;
+    let index = -1;
+    if (typeof itemOrIndex === 'object' && itemOrIndex !== null) {
+      item = itemOrIndex;
+      index = this.playerInventory.indexOf(item);
+    } else {
+      index = itemOrIndex;
+      item = this.playerInventory[index];
+    }
+
     if (!item) return;
 
-    const actualYield = salvageItem(item.rawItem) || yieldOrbs || Math.max(1, Math.round((item.orbValue || 25) * 0.1));
+    const actualYield = salvageItem(item.rawItem || item) || yieldOrbs || Math.max(1, Math.round((item.orbValue || 25) * 0.1));
     this.playerOrbs += actualYield;
+
+    if (index >= 0 && index < this.playerInventory.length && this.playerInventory[index] === item) {
+      this.playerInventory.splice(index, 1);
+    } else {
+      const idx = this.playerInventory.indexOf(item);
+      if (idx !== -1) this.playerInventory.splice(idx, 1);
+    }
+
     this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+    this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
     this.tacticalHud.addLog(
       `✦ SALVAGED: ${item.name} disassembled for +${actualYield} Set Orbs (10% sink).`,
       'loot'
@@ -1015,8 +1136,9 @@ class TacticsGame {
       'system'
     );
 
-    // If it was the player's turn, immediately trigger AI takeover
-    if (this.autoBattle && this.activeUnit && this.currentMode !== 'animating') {
+    // If it was the player's turn, immediately trigger AI takeover safely under concurrency lock
+    if (this.autoBattle && this.activeUnit && this.currentMode !== 'animating' && !this._isProcessingTurn) {
+      this._isProcessingTurn = true;
       this._executeAITurn();
     }
   }
@@ -1026,6 +1148,50 @@ class TacticsGame {
     this.tacticalHud.addLog(`Generating new battlefield seed 0x${nextSeed.toString(16)}...`, 'system');
     await this.setupBattlefield(nextSeed);
     this.advanceTurn();
+  }
+
+  _pickTileOrUnit(clientX, clientY) {
+    let picked = this.isometricBoard.pickTile(
+      clientX,
+      clientY,
+      this.tacticalCamera,
+      this.canvas
+    );
+
+    // If pickTile didn't hit a top tile face directly under a unit sprite,
+    // check screen-projected distance to living units within 36px
+    const rect = this.canvas.getBoundingClientRect();
+    const mouseX = clientX - rect.left;
+    const mouseY = clientY - rect.top;
+
+    let closestUnit = null;
+    let minUnitDist = 36; // 36px threshold
+
+    for (const unit of this.units) {
+      if (unit.alive === false || (unit.hp !== undefined && unit.hp <= 0)) continue;
+      const actorPos = this.stageUnitManager.getUnitScreenAnchor(unit.id, this.isometricBoard) || unit.group?.position;
+      if (actorPos) {
+        const proj = this.projectWorldToScreen(actorPos);
+        if (proj && proj.visible !== false) {
+          const dist = Math.hypot(proj.x - mouseX, proj.y - mouseY);
+          if (dist < minUnitDist) {
+            minUnitDist = dist;
+            closestUnit = unit;
+          }
+        }
+      }
+    }
+
+    if (closestUnit) {
+      return {
+        x: closestUnit.gridX ?? closestUnit.x,
+        z: closestUnit.gridZ ?? closestUnit.z,
+        elevation: closestUnit.elevation ?? 0,
+        unit: closestUnit
+      };
+    }
+
+    return picked;
   }
 
   _initEventListeners() {
@@ -1041,18 +1207,13 @@ class TacticsGame {
     this.canvas.addEventListener('mousemove', (e) => {
       if (this.currentMode === 'animating') return;
 
-      const picked = this.isometricBoard.pickTile(
-        e.clientX,
-        e.clientY,
-        this.tacticalCamera,
-        this.canvas
-      );
+      const picked = this._pickTileOrUnit(e.clientX, e.clientY);
 
       if (picked) {
         this.isometricBoard.setHoverTile(picked.x, picked.z);
 
         // Find unit at tile
-        const unitAtTile = this.units.find(
+        const unitAtTile = picked.unit || this.units.find(
           (u) =>
             u.alive !== false &&
             (u.hp === undefined || u.hp > 0) &&
@@ -1086,19 +1247,14 @@ class TacticsGame {
     this.canvas.addEventListener('click', (e) => {
       if (this.currentMode === 'animating') return;
 
-      const picked = this.isometricBoard.pickTile(
-        e.clientX,
-        e.clientY,
-        this.tacticalCamera,
-        this.canvas
-      );
+      const picked = this._pickTileOrUnit(e.clientX, e.clientY);
 
       if (!picked) return;
 
       if (this.currentMode === 'move') {
         this.executeMove(picked);
       } else if (this.currentMode === 'act') {
-        const unitAtTile = this.units.find(
+        const unitAtTile = picked.unit || this.units.find(
           (u) =>
             u.alive !== false &&
             (u.hp === undefined || u.hp > 0) &&

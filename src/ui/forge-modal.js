@@ -403,73 +403,101 @@ export class ForgeModal {
   /**
    * Perform craft action
    */
-  _handleCraft(orbs) {
+  async _handleCraft(orbs) {
     if (this.state.orbs < orbs) return;
 
     // Trigger external callback if supplied
     let externalResult = null;
     if (this.callbacks.onCraftItem) {
-      externalResult = this.callbacks.onCraftItem(orbs);
+      externalResult = await this.callbacks.onCraftItem(orbs);
     }
 
-    // Synthesize realistic Set.world craft receipt
-    const rollsCount = Math.max(1, Math.floor(Math.sqrt(orbs / 2)));
-    let grade = 'C';
-    let score = Math.round((Math.sqrt(orbs) * 12 + Math.random() * 40) * 10) / 10;
+    let forgedItem;
+    let receipt;
 
-    if (orbs >= 15625 || score >= 900) grade = 'S';
-    else if (orbs >= 3125 || score >= 750) grade = 'A';
-    else if (orbs >= 625 || score >= 500) grade = 'B';
-    else if (orbs >= 125 || score >= 300) grade = 'C';
-    else grade = 'D';
+    if (externalResult && externalResult.item) {
+      forgedItem = externalResult.item;
+      receipt = externalResult.receipt || {
+        candidateRolls: Math.max(1, Math.floor(Math.sqrt(orbs / 2))),
+        tierGrade: forgedItem.grade || 'C',
+        score: forgedItem.rawItem?.score || 500,
+        orbValue: orbs,
+        material: forgedItem.material || 'Mythril Alloy',
+        item: forgedItem,
+        provenance: `https://set.world/craft?orbs=${orbs}`
+      };
 
-    const materials = ['Mythril', 'Obsidian Glass', 'Adamantine', 'Dragon Scale', 'Starlight Silver', 'Dark Steel', 'Eldritch Bone'];
-    const material = materials[Math.floor(Math.random() * materials.length)];
+      // Synchronize internal state with main.js without double-deduction or duplication
+      if (externalResult.remainingOrbs !== undefined) {
+        this.state.orbs = externalResult.remainingOrbs;
+      } else {
+        this.state.orbs = Math.max(0, this.state.orbs - orbs);
+      }
 
-    const itemNames = [
-      `${material} Broadsword`,
-      `${material} Longbow`,
-      `${material} Arcane Scepter`,
-      `${material} War Spear`,
-      `${material} Heavy Aegis`,
-      `${material} Battle Cuirass`,
-    ];
-    const itemName = itemNames[Math.floor(Math.random() * itemNames.length)];
+      if (!this.state.inventory.some((i) => i.id === forgedItem.id)) {
+        this.state.inventory.unshift(forgedItem);
+      }
+      this.state.latestReceipt = receipt;
+    } else {
+      // Fallback synthesis if no external result
+      const rollsCount = Math.max(1, Math.floor(Math.sqrt(orbs / 2)));
+      let grade = 'C';
+      let score = Math.round((Math.sqrt(orbs) * 12 + Math.random() * 40) * 10) / 10;
 
-    const bonusTypes = ['STR', 'DEX', 'INT', 'AGI', 'VIT'];
-    const b1 = bonusTypes[Math.floor(Math.random() * bonusTypes.length)];
-    const b2 = bonusTypes[Math.floor(Math.random() * bonusTypes.length)];
-    const bonusMag = grade === 'S' ? 24 : grade === 'A' ? 16 : grade === 'B' ? 10 : grade === 'C' ? 6 : 3;
-    const statsBonus = `+${bonusMag} ${b1}, +${Math.round(bonusMag * 0.6)} ${b2}`;
+      if (orbs >= 15625 || score >= 900) grade = 'S';
+      else if (orbs >= 3125 || score >= 750) grade = 'A';
+      else if (orbs >= 625 || score >= 500) grade = 'B';
+      else if (orbs >= 125 || score >= 300) grade = 'C';
+      else grade = 'D';
 
-    const forgedItem = externalResult?.item || {
-      id: `item-${Date.now()}`,
-      name: itemName,
-      type: itemName.includes('Cuirass') || itemName.includes('Aegis') ? 'armor' : 'weapon',
-      grade: grade,
-      orbValue: orbs,
-      material: material,
-      statsBonus: statsBonus,
-      equippedTo: null,
-    };
+      const materials = ['Mythril', 'Obsidian Glass', 'Adamantine', 'Dragon Scale', 'Starlight Silver', 'Dark Steel', 'Eldritch Bone'];
+      const material = materials[Math.floor(Math.random() * materials.length)];
 
-    const receipt = externalResult?.receipt || {
-      candidateRolls: rollsCount,
-      tierGrade: grade,
-      score: score,
-      orbValue: orbs,
-      material: material,
-      item: forgedItem,
-      provenance: `https://set.world/craft?orbs=${orbs}&seed=tactics-${Date.now()}`,
-    };
+      const itemNames = [
+        `${material} Broadsword`,
+        `${material} Longbow`,
+        `${material} Arcane Scepter`,
+        `${material} War Spear`,
+        `${material} Heavy Aegis`,
+        `${material} Battle Cuirass`,
+      ];
+      const itemName = itemNames[Math.floor(Math.random() * itemNames.length)];
 
-    // Update internal state
-    this.state.orbs -= orbs;
-    this.state.inventory.unshift(forgedItem);
-    this.state.latestReceipt = receipt;
+      const bonusTypes = ['STR', 'DEX', 'INT', 'AGI', 'VIT'];
+      const b1 = bonusTypes[Math.floor(Math.random() * bonusTypes.length)];
+      const b2 = bonusTypes[Math.floor(Math.random() * bonusTypes.length)];
+      const bonusMag = grade === 'S' ? 24 : grade === 'A' ? 16 : grade === 'B' ? 10 : grade === 'C' ? 6 : 3;
+      const statsBonus = `+${bonusMag} ${b1}, +${Math.round(bonusMag * 0.6)} ${b2}`;
+
+      forgedItem = {
+        id: `item-${Date.now()}`,
+        name: itemName,
+        type: itemName.includes('Cuirass') || itemName.includes('Aegis') ? 'armor' : 'weapon',
+        grade: grade,
+        orbValue: orbs,
+        material: material,
+        statsBonus: statsBonus,
+        equippedTo: null,
+      };
+
+      receipt = {
+        candidateRolls: rollsCount,
+        tierGrade: grade,
+        score: score,
+        orbValue: orbs,
+        material: material,
+        item: forgedItem,
+        provenance: `https://set.world/craft?orbs=${orbs}&seed=tactics-${Date.now()}`,
+      };
+
+      // Update internal state
+      this.state.orbs -= orbs;
+      this.state.inventory.unshift(forgedItem);
+      this.state.latestReceipt = receipt;
+    }
 
     // Update modal display
-    const orbsEl = this.modalEl.querySelector('#forge-modal-orbs');
+    const orbsEl = this.modalEl?.querySelector('#forge-modal-orbs');
     if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
 
     this._renderActiveTab();
@@ -580,14 +608,15 @@ export class ForgeModal {
     const item = this.state.inventory[itemIndex];
     if (!item) return;
 
-    this.state.inventory.splice(itemIndex, 1);
-    this.state.orbs += yieldOrbs;
-
-    const orbsEl = this.modalEl.querySelector('#forge-modal-orbs');
-    if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
-
-    this.callbacks.onSalvageItem?.(itemIndex, yieldOrbs);
-    this._renderActiveTab();
+    if (this.callbacks.onSalvageItem) {
+      this.callbacks.onSalvageItem(itemIndex, yieldOrbs);
+    } else {
+      this.state.inventory.splice(itemIndex, 1);
+      this.state.orbs += yieldOrbs;
+      const orbsEl = this.modalEl?.querySelector('#forge-modal-orbs');
+      if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
+      this._renderActiveTab();
+    }
   }
 
   /**

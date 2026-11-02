@@ -76,6 +76,7 @@ export class TacticalHUD {
         </div>
         <div class="seed-badge" id="hud-seed-badge">SEED: 0x1337-TACTICS</div>
       </div>
+      <div class="top-bar-center" id="hud-law-slot"></div>
       <div class="top-bar-right">
         <div class="orbs-wallet-badge" id="hud-orbs-wallet" title="Set Orbs Balance">
           <span class="orb-sparkle">✦</span>
@@ -98,6 +99,7 @@ export class TacticalHUD {
     `;
     this.container.appendChild(topBar);
     this.elements.topBar = topBar;
+    this.elements.lawSlot = topBar.querySelector('#hud-law-slot');
 
     // 2. CT Turn Order Ribbon (Upcoming 8 turns)
     const turnRibbon = document.createElement('div');
@@ -318,6 +320,43 @@ export class TacticalHUD {
   }
 
   /**
+   * Updates FFTA Judge Law banner pill in top bar.
+   * @param {Object|string|null} law
+   */
+  updateLawBanner(law) {
+    this.activeLaw = law;
+    const slot = this.elements.lawSlot || this.container.querySelector('#hud-law-slot');
+    if (!slot) return;
+
+    if (!law) {
+      slot.innerHTML = '';
+      return;
+    }
+
+    let title = '';
+    let forbidden = '';
+    let description = '';
+
+    if (typeof law === 'string') {
+      title = law;
+      description = 'Infractions incur Judge Yellow Card penalty (-1 Orb, CT penalty)';
+    } else {
+      title = law.name || 'Law of Chivalry';
+      forbidden = law.forbidden || law.forbiddenAction || '';
+      description = law.description || (forbidden ? `Forbidden: ${forbidden}` : 'Judge rule active');
+    }
+
+    const fullLabel = forbidden && !title.includes(forbidden) ? `${title} — Forbidden: ${forbidden}` : title;
+
+    slot.innerHTML = `
+      <div class="judge-law-pill" title="${description} [Infractions incur Judge penalties]">
+        <span class="law-scale-glyph">⚖</span>
+        <span class="law-title">LAW: ${fullLabel}</span>
+      </div>
+    `;
+  }
+
+  /**
    * Updates horizontal CT Turn Order Ribbon (next 8 upcoming units in chronological order)
    * @param {Array<Object>} queuePreview - array of unit turns
    * @param {Object} [activeUnit] - currently active unit
@@ -332,22 +371,29 @@ export class TacticalHUD {
 
     slice.forEach((entry, idx) => {
       const unit = entry.unit || entry;
+      const uId = unit.id || unit.unitId;
+      const uClass = unit.className || unit.job || unit.class || 'Warrior';
       const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
       const teamClass = isAzure ? 'azure' : 'crimson';
       const teamLabel = isAzure ? 'AZURE' : 'CRIM';
-      const isActive = activeUnit && (unit.id === activeUnit.id || idx === 0);
+      const activeId = activeUnit ? (activeUnit.id || activeUnit.unitId) : null;
+      const isActive = activeId && (uId === activeId || idx === 0);
       const grade = (unit.grade || 'B').toUpperCase();
       const ctVal = Math.min(100, Math.max(0, Math.round(unit.ct ?? 100)));
+      const isBoss = !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
+      const rawWeapon = unit.heldModelName || unit.weapon?.heldModelName || unit.weaponType || unit.weapon?.weaponType || unit.tool?.name || '';
+      const weaponTag = rawWeapon ? rawWeapon.toUpperCase() : '';
 
       const card = document.createElement('div');
-      card.className = `turn-card ${teamClass} ${isActive ? 'active' : ''}`;
+      card.className = `turn-card ${teamClass} ${isActive ? 'active' : ''} ${isBoss ? 'boss-card' : ''}`;
       card.innerHTML = `
         <div class="turn-card-header">
           <span class="turn-team-badge">${isActive ? '✦ TURN' : teamLabel}</span>
-          <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
+          ${isBoss ? '<span class="turn-boss-crown">★ BOSS</span>' : `<span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>`}
         </div>
         <div class="turn-card-body">
-          <span class="turn-unit-class" title="${unit.name || 'Unit'}">${unit.job || unit.class || unit.name || 'Soldier'}</span>
+          <span class="turn-unit-class" title="${unit.name || 'Unit'}">${uClass}</span>
+          ${weaponTag ? `<span class="turn-weapon-tag">[${weaponTag}]</span>` : ''}
         </div>
         <div class="turn-card-ct">
           <span>CT</span>
@@ -398,6 +444,8 @@ export class TacticalHUD {
     const card = this.elements.activeCard;
     card.style.visibility = 'visible';
 
+    const uId = unit.id || unit.unitId;
+    const uClass = unit.className || unit.job || unit.class || 'Knight';
     const grade = (unit.grade || 'B').toUpperCase();
     const hp = Math.max(0, unit.hp ?? 100);
     const maxHp = unit.maxHp ?? 100;
@@ -409,15 +457,15 @@ export class TacticalHUD {
 
     const ct = Math.min(100, Math.max(0, Math.round(unit.ct ?? 100)));
     const power = unit.powerRating || unit.power || 450;
-    const toolName = unit.tool?.name || unit.weapon || 'Mythril Blade';
-    const orbVal = unit.tool?.orbValue || unit.orbValue || 125;
+    const toolName = unit.tool?.name || unit.weapon?.name || unit.heldModelName || unit.weapon || 'Mythril Blade';
+    const orbVal = unit.tool?.orbValue || unit.weapon?.orbValue || unit.orbValue || 125;
 
     // 5 primary stats
     const stats = unit.stats || {};
-    const str = stats.str ?? stats.STR ?? 35;
-    const dex = stats.dex ?? stats.DEX ?? 28;
-    const int = stats.int ?? stats.INT ?? 24;
-    const agi = stats.agi ?? stats.AGI ?? 30;
+    const str = stats.str ?? stats.STR ?? stats.physicalDamage ?? 35;
+    const dex = stats.dex ?? stats.DEX ?? stats.accuracy ?? 28;
+    const int = stats.int ?? stats.INT ?? stats.magicDamage ?? 24;
+    const agi = stats.agi ?? stats.AGI ?? (stats.walkSpeed ? Math.round(stats.walkSpeed * 25) : 30);
     const vit = stats.vit ?? stats.VIT ?? 32;
 
     card.innerHTML = `
@@ -427,7 +475,7 @@ export class TacticalHUD {
             <span>${unit.name || 'Hero'}</span>
             <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
           </div>
-          <div class="card-unit-class">${unit.job || unit.class || 'Knight'} // LV.${unit.level || 1}</div>
+          <div class="card-unit-class">${uClass} // LV.${unit.level || 1}</div>
         </div>
         <div class="card-power-badge">PWR ${power}</div>
       </div>
@@ -487,6 +535,7 @@ export class TacticalHUD {
    */
   _renderCommandMenu(unit, mode, selectedAbility) {
     const menu = this.elements.commandMenu;
+    const uClass = unit.className || unit.job || unit.class || 'Knight';
     const hasMoved = !!unit.hasMoved;
     const hasActed = !!unit.hasActed;
 
@@ -494,7 +543,7 @@ export class TacticalHUD {
       <div class="cmd-header">
         <div class="cmd-header-title">
           <span>⚔️</span>
-          <span>${unit.name || 'Hero'} [${unit.job || unit.class || 'Knight'}]</span>
+          <span>${unit.name || 'Hero'} [${uClass}]</span>
         </div>
         <span style="color: var(--text-gold); font-size: 10px;">TURN ACTIVE</span>
       </div>
@@ -708,25 +757,29 @@ export class TacticalHUD {
 
     const ct = Math.min(100, Math.max(0, Math.round(unit.ct ?? 100)));
     const power = unit.powerRating || unit.power || 400;
-    const toolName = unit.tool?.name || unit.weapon || 'Dark Iron Axe';
-    const orbVal = unit.tool?.orbValue || unit.orbValue || 80;
+    const isBoss = !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
+    const uClass = unit.className || unit.job || unit.class || 'Warrior';
+    const rawWeapon = unit.heldModelName || unit.weapon?.heldModelName || unit.weaponType || unit.weapon?.weaponType || unit.tool?.name || '';
+    const weaponModel = rawWeapon ? rawWeapon.toUpperCase() : '';
+    const toolName = unit.tool?.name || unit.weapon?.name || (weaponModel ? `${weaponModel} Weapon` : (isAzure ? 'Mythril Blade' : 'Dark Iron Blade'));
+    const orbVal = unit.tool?.orbValue || unit.weapon?.orbValue || unit.orbValue || (isAzure ? 125 : 80);
 
     const stats = unit.stats || {};
-    const str = stats.str ?? stats.STR ?? 32;
-    const dex = stats.dex ?? stats.DEX ?? 26;
-    const int = stats.int ?? stats.INT ?? 20;
-    const agi = stats.agi ?? stats.AGI ?? 28;
+    const str = stats.str ?? stats.STR ?? stats.physicalDamage ?? 32;
+    const dex = stats.dex ?? stats.DEX ?? stats.accuracy ?? 26;
+    const int = stats.int ?? stats.INT ?? stats.magicDamage ?? 20;
+    const agi = stats.agi ?? stats.AGI ?? (stats.walkSpeed ? Math.round(stats.walkSpeed * 25) : 28);
     const vit = stats.vit ?? stats.VIT ?? 30;
 
     container.innerHTML = `
-      <div class="unit-status-card target-unit">
+      <div class="unit-status-card target-unit ${isAzure ? 'azure' : 'crimson'} ${isBoss ? 'boss' : ''}">
         <div class="card-top-row">
           <div>
             <div class="card-unit-name">
               <span>${unit.name || 'Defender'}</span>
-              <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
+              ${isBoss ? '<span class="turn-boss-crown">★ BOSS</span>' : `<span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>`}
             </div>
-            <div class="card-unit-class">${unit.job || unit.class || 'Warrior'} [${isAzure ? 'AZURE' : 'CRIMSON'}]</div>
+            <div class="card-unit-class">${uClass} [${isAzure ? 'AZURE CLAN' : 'CRIMSON ORDER'}] ${weaponModel ? `// [${weaponModel}]` : ''}</div>
           </div>
           <div class="card-power-badge">PWR ${power}</div>
         </div>
@@ -734,11 +787,11 @@ export class TacticalHUD {
         <div class="stat-bars-group">
           <div class="stat-bar-container">
             <div class="stat-bar-label">
-              <span style="color: #f87171;">HP</span>
+              <span style="color: ${isAzure ? '#38bdf8' : '#f87171'};">HP</span>
               <span>${hp} / ${maxHp}</span>
             </div>
             <div class="stat-bar-track">
-              <div class="stat-bar-fill hp-fill ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
+              <div class="stat-bar-fill ${isAzure ? 'azure-fill' : 'crimson-fill'} ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
             </div>
           </div>
 
@@ -755,7 +808,7 @@ export class TacticalHUD {
 
         <div class="card-weapon-row">
           <div class="card-weapon-name">
-            <span>🛡️</span>
+            <span>${isAzure ? '⚔️' : '☠️'}</span>
             <span>${toolName}</span>
           </div>
           <div class="card-weapon-orbs">✦ ${orbVal} ORBS</div>
@@ -880,7 +933,7 @@ export class TacticalHUD {
     const container = this.elements.overheadsContainer;
 
     units.forEach((unit) => {
-      const unitId = unit.id || unit.name;
+      const unitId = unit.id || unit.unitId || unit.name;
       seenIds.add(unitId);
 
       const isDead = unit.isDead || (unit.hp !== undefined && unit.hp <= 0);
@@ -909,12 +962,23 @@ export class TacticalHUD {
         return;
       }
 
+      const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
+      const isBoss = !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
+      const uClass = unit.className || unit.job || unit.class || 'Warrior';
+      const rawWeapon = unit.heldModelName || unit.weapon?.heldModelName || unit.weaponType || unit.weapon?.weaponType || unit.tool?.name || '';
+      const weaponTag = rawWeapon ? `[${rawWeapon.toUpperCase()}]` : '';
+
+      const activeId = this.activeUnit ? (this.activeUnit.id || this.activeUnit.unitId) : null;
+      const isActive = activeId && (unitId === activeId);
+
+      const classNameAttr = `unit-overhead ${isAzure ? 'azure' : 'crimson'} ${isBoss ? 'boss' : ''} ${isActive ? 'active' : ''}`;
       if (!el) {
         el = document.createElement('div');
-        const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
-        el.className = `unit-overhead ${isAzure ? 'azure' : 'crimson'}`;
+        el.className = classNameAttr;
         container.appendChild(el);
         this.overheadMap.set(unitId, el);
+      } else {
+        el.className = classNameAttr;
       }
 
       el.style.display = 'flex';
@@ -924,16 +988,50 @@ export class TacticalHUD {
       const hp = Math.max(0, unit.hp ?? 100);
       const maxHp = unit.maxHp ?? 100;
       const hpPct = Math.min(100, Math.round((hp / maxHp) * 100));
-      const grade = (unit.grade || 'B').toUpperCase();
-      const isActive = this.activeUnit && (unit.id === this.activeUnit.id);
 
-      el.innerHTML = `
-        ${isActive ? '<span class="overhead-crown">👑</span>' : ''}
-        <div class="overhead-tag">[${grade}] ${unit.job || unit.class || unit.name || 'Unit'}</div>
-        <div class="overhead-hp-bar">
-          <div class="overhead-hp-fill" style="width: ${hpPct}%;"></div>
-        </div>
-      `;
+      if (isAzure) {
+        // Azure Clan: Clean royal-blue shield crest (◆), cyan-blue HP fill, crisp white name + class pill
+        el.innerHTML = `
+          ${isActive ? '<span class="overhead-crown azure-crown">👑</span>' : ''}
+          <div class="overhead-pill azure-pill">
+            <span class="crest-icon">◆</span>
+            <span class="overhead-unit-name">${unit.name || 'Hero'}</span>
+            <span class="overhead-class-badge">${uClass}</span>
+            ${weaponTag ? `<span class="overhead-weapon-tag">${weaponTag}</span>` : ''}
+          </div>
+          <div class="overhead-hp-bar azure-bar">
+            <div class="overhead-hp-fill azure-fill ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
+          </div>
+        `;
+      } else {
+        // Crimson Order Enemies: Jagged dark-obsidian & blood-crimson frame with angled/horned corners,
+        // crimson-orange HP fill, enemy rank/class badge, and weapon icon
+        let roleBadge = `⚔ VANGUARD`;
+        if (isBoss) {
+          roleBadge = `☠ WARLORD [BOSS]`;
+        } else if (/mage|hexer|wizard|arcane/i.test(uClass)) {
+          roleBadge = `✦ HEXER`;
+        } else if (/sniper|archer|deadeye|hunter|gunner/i.test(uClass)) {
+          roleBadge = `⌖ DEADEYE`;
+        } else if (/trickster|thief|assassin|shadow/i.test(uClass)) {
+          roleBadge = `🗡 SHADOW`;
+        } else if (/vanguard|knight|warrior|paladin|guardian/i.test(uClass)) {
+          roleBadge = `⚔ VANGUARD`;
+        } else {
+          roleBadge = `⚔ ${uClass.toUpperCase()}`;
+        }
+
+        el.innerHTML = `
+          ${isActive ? '<span class="overhead-crown crimson-crown">⚔</span>' : ''}
+          <div class="overhead-pill crimson-pill ${isBoss ? 'boss-pill' : ''}">
+            <span class="enemy-role-badge">${roleBadge}</span>
+            ${weaponTag ? `<span class="enemy-weapon-badge">${weaponTag}</span>` : ''}
+          </div>
+          <div class="overhead-hp-bar crimson-bar">
+            <div class="overhead-hp-fill crimson-fill ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
+          </div>
+        `;
+      }
     });
 
     // Clean up units that are no longer in the list
