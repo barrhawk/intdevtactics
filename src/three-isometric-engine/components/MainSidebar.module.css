@@ -1,0 +1,84 @@
+.sidebar {
+  position: sticky;
+  top: 0;
+  flex-shrink: 0;
+  height: 100vh;
+  height: 100dvh;
+  padding: 24px 0 24px 0;
+  border-right: 1px solid var(--theme-border);
+  overflow: hidden;
+  overflow-y: auto;
+
+  &::-webkit-scrollbar {
+    width: 2px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--theme-border);
+  }
+
+  &:hover::-webkit-scrollbar-thumb {
+    background: var(--theme-text-subdued);
+  }
+}
+
+/* NOTE(@jimmylee): Chrome ignores ::-webkit-scrollbar once either standard property is set, so these
+   stay with the browsers that have no such pseudo-element. */
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--theme-border) transparent;
+  }
+}
+
+.item,
+.itemActive {
+  display: block;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-mono);
+  line-height: var(--line-height-mono);
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: pre;
+  /* NOTE(@jimmylee): a row is one serif line tall, so the first row sits on the first paragraph's line
+     and the sidebar keeps the page's rhythm. */
+  padding: calc((var(--line-height-serif) - var(--line-height-mono)) / 2) 16px calc((var(--line-height-serif) - var(--line-height-mono)) / 2) 8px;
+  user-select: none;
+  transition: 200ms ease color;
+
+  &:focus-visible {
+    outline: 1px solid var(--theme-text);
+    outline-offset: -1px;
+  }
+}
+
+.item {
+  color: var(--theme-text-subdued);
+
+  &:visited {
+    color: var(--theme-text-subdued);
+  }
+
+  &:hover {
+    color: var(--theme-text);
+  }
+}
+
+.itemActive {
+  color: var(--theme-text);
+
+  &:visited {
+    color: var(--theme-text);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item,
+  .itemActive {
+    transition: none;
+  }
+}

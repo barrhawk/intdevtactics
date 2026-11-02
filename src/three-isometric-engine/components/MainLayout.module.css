@@ -1,0 +1,16 @@
+/* NOTE(@jimmylee): the window scrolls, not .media. The demo canvas and the lazy sections measure
+   against the viewport, and an IntersectionObserver rootMargin does not reach into a nested scroller. */
+.body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.media {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}

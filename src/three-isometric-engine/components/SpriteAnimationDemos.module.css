@@ -1,0 +1,202 @@
+/* NOTE(@jimmylee): ThreeJS demos section of the main route. One canvas overlays the card grid; each card's
+   .stageSlot is a viewport the shared renderer draws into. The component sets the canvas height and
+   moves it down the grid, because the grid is taller than one drawing buffer. */
+
+.root {
+  display: block;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+
+/* NOTE(@jimmylee): the controls of a group touch, each pulled 1px over the one before it and the row
+   above it, so a group has one border between options, wrapped or not. The padding pays those pixels back. */
+.controlGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 1px 0 0 1px;
+}
+
+.controlLabel {
+  color: var(--theme-text-subdued);
+  padding: var(--control-text-inset) 1ch 0 0;
+}
+
+.button + .controlLabel {
+  padding-left: 1ch;
+  padding-right: 0;
+}
+
+.button {
+  font: inherit;
+  color: var(--theme-text);
+  background: var(--theme-background);
+  border: 1px solid var(--theme-border);
+  box-sizing: border-box;
+  height: var(--control-height);
+  margin: -1px 0 0 -1px;
+  padding: var(--control-text-inset) 1ch 0 1ch;
+  position: relative;
+  text-transform: uppercase;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--theme-background-subdued);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--theme-text);
+    outline-offset: 1px;
+    z-index: 2;
+  }
+
+  &[aria-pressed='true'] {
+    background: var(--theme-inverse-background);
+    border-color: var(--theme-inverse-background);
+    color: var(--theme-inverse-text);
+    z-index: 1;
+  }
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 2ch;
+  list-style: none;
+  margin: 0 0 8px 0;
+  padding: 0;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 1ch;
+}
+
+.swatch {
+  display: inline-block;
+  width: var(--font-size-mono);
+  height: var(--font-size-mono);
+}
+
+.loading {
+  color: var(--theme-text-subdued);
+  margin: 0 0 8px 0;
+}
+
+.error {
+  color: var(--theme-error);
+  margin: 0 0 8px 0;
+}
+
+.grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  image-rendering: pixelated;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  box-shadow: inset 0 0 0 1px var(--theme-border);
+  padding: 8px;
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1ch;
+  margin-bottom: 8px;
+  white-space: nowrap;
+}
+
+.cardTitle {
+  font-size: var(--font-size-mono);
+  line-height: var(--line-height-mono);
+  font-weight: 400;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardSeq {
+  flex-shrink: 0;
+  color: var(--theme-text-subdued);
+}
+
+.stageSlot {
+  width: 100%;
+  aspect-ratio: 6 / 5;
+}
+
+/* NOTE(@jimmylee): one fixed line — the shared canvas places its viewports from each .stageSlot, so a
+   status that wrapped would move every viewport below it. */
+.status {
+  margin: 8px 0 0 0;
+  height: var(--line-height-mono);
+  line-height: var(--line-height-mono);
+  font-size: var(--font-size-mono-small);
+  color: var(--theme-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* NOTE(@jimmylee): the action's frames by tick, fixed height like .status. SEQ events mark the top
+   edge, engine events the bottom edge; the head is the demo clock. */
+.timeline {
+  position: relative;
+  display: flex;
+  gap: 1px;
+  height: 12px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.timelineFrame {
+  min-width: 0;
+  background: var(--theme-border);
+}
+
+.timelineSeqEvent,
+.timelineEngineEvent {
+  position: absolute;
+  width: 3px;
+  height: 6px;
+  margin-left: -1px;
+}
+
+.timelineSeqEvent {
+  top: 0;
+  background: var(--theme-seq-event);
+}
+
+.timelineEngineEvent {
+  bottom: 0;
+  background: var(--theme-engine-event);
+}
+
+.timelineHead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--theme-text);
+}

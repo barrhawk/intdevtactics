@@ -1,0 +1,34 @@
+.table {
+  width: 100%;
+  text-align: left;
+  color: var(--theme-text-subdued);
+  margin-bottom: 8px;
+
+  & th {
+    font-weight: 400;
+    color: var(--theme-text);
+  }
+}
+
+/* NOTE(jimmylee): Wide table variant for modes with many columns (punch, full-body). */
+.tableWide {
+  width: 100%;
+  text-align: left;
+  color: var(--theme-text-subdued);
+  table-layout: fixed;
+  font-size: var(--font-size-mono-small);
+  margin-bottom: 8px;
+}
+
+.tableWide th,
+.tableWide td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+}
+
+.tableWide th {
+  font-weight: 400;
+  color: var(--theme-text);
+}
