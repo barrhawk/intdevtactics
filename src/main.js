@@ -19,6 +19,7 @@ import { StageUnitManager } from './stage/unit-actor.js';
 import { TurnManager } from './game/turn-manager.js';
 import { TacticalHUD } from './ui/tactical-hud.js';
 import { ForgeModal } from './ui/forge-modal.js';
+import * as SetWorldClient from './game/setworld-client.js';
 import {
   generateClanRoster,
   craftItem,
@@ -34,6 +35,22 @@ import {
   calculateFacing
 } from './game/combat-rules.js';
 
+// Fallback or imported Set.world item booster (+1 ★ up to +5 ★)
+const boostItemWithOrbs = typeof SetWorldClient['boostItemWithOrbs'] === 'function'
+  ? SetWorldClient['boostItemWithOrbs']
+  : (item, orbs = 75) => {
+      if (!item) return item;
+      item.stars = Math.min(5, (item.stars || 0) + 1);
+      const tiers = ['Bronze', 'Bronze', 'Iron', 'Mythril', 'Gold', 'Adamantite'];
+      item.finishTier = tiers[item.stars] || 'Mythril';
+      const prefixes = ['Boreal', 'Astral', 'Chaotic', 'Celestial', 'Fiery'];
+      if (!item.elementalPrefix) {
+        item.elementalPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+      }
+      item.orbValue = (item.orbValue || 25) + orbs;
+      return item;
+    };
+
 class TacticsGame {
   constructor() {
     this.canvas = document.getElementById('tactics-stage');
@@ -46,6 +63,7 @@ class TacticsGame {
     // Battle Configuration & Persistence
     this.baseSeed = 0x1337;
     this.playerOrbs = 450;
+    this.raidBossMode = false;
     this.autoBattle = false;
     this.battleOver = false;
     this.turnCount = 1;
@@ -230,6 +248,7 @@ class TacticsGame {
       onRotateCamera: (delta) => this.rotateCamera(delta),
       onZoomCamera: (delta) => this.tacticalCamera.zoom(delta),
       onToggleAutoBattle: () => this.toggleAutoBattle(),
+      onToggleRaidBoss: () => this.toggleRaidBossMode(),
       onNewSeed: () => this.rollNewBattlefield(),
       onOpenForge: () => this.openForgeModal()
     });
@@ -237,6 +256,7 @@ class TacticsGame {
     // Set.world Clan Forge Modal Callbacks
     this.forgeModal = new ForgeModal(document.body, {
       onCraftItem: (orbs) => this.handleCraftItem(orbs),
+      onBoostItem: (index) => this.handleBoostItem(index),
       onSalvageItem: (index, yieldOrbs) => this.handleSalvageItem(index, yieldOrbs),
       onEquipItem: (index, unitId) => this.handleEquipItem(index, unitId),
       onClose: () => {
@@ -310,8 +330,8 @@ class TacticsGame {
     this.isometricBoard.dispose();
     this.isometricBoard = new IsometricBoard(this.scene, this.baseSeed);
 
-    // Generate seeded clan roster (4 Azure Clan vs 4 Crimson Order)
-    const rosterData = await generateClanRoster(this.baseSeed, this.isometricBoard);
+    // Generate seeded clan roster (4 Azure Clan vs 4 Crimson Order, or 250x Raid Boss)
+    const rosterData = await generateClanRoster(this.baseSeed, this.isometricBoard, { raidBossMode: this.raidBossMode });
     if (this.matchId !== currentMatchId) return;
 
     this.units = rosterData.units;
@@ -363,7 +383,8 @@ class TacticsGame {
       orbs: this.playerOrbs,
       compassLabel: `${this.tacticalCamera.compass} ${this.tacticalCamera.step * 45}°`,
       autoBattle: this.autoBattle,
-      turnNumber: this.turnCount
+      turnNumber: this.turnCount,
+      raidBossMode: this.raidBossMode
     });
 
     // Update active law banner if Judge Law system exists
@@ -376,6 +397,19 @@ class TacticsGame {
       `BATTLEFIELD SEED 0x${this.baseSeed.toString(16).toUpperCase()} READY // Azure Clan vs Crimson Order.`,
       'system'
     );
+  }
+
+  toggleRaidBossMode() {
+    this.raidBossMode = !this.raidBossMode;
+    this.tacticalHud.setHeaderState({ raidBossMode: this.raidBossMode });
+    if (this.raidBossMode) {
+      this.tacticalHud.addLog('☠ WARNING: 250x SET.WORLD RAID BOSS SOVEREIGN APPROACHING!', 'system');
+    } else {
+      this.tacticalHud.addLog('Raid Boss Mode deactivated // Standard Clan skirmish.', 'system');
+    }
+    this.setupBattlefield(this.baseSeed).then(() => {
+      this.advanceTurn();
+    });
   }
 
   _syncForgeRoster() {
@@ -400,6 +434,14 @@ class TacticsGame {
       traits: ['Set Heritage', `${u.className} Discipline`],
       equippedTool: `${u.weapon?.heldModelName ? u.weapon.heldModelName.toUpperCase() : 'WEAPON'} (✦ 125 Orbs)`,
       equippedArmor: 'Azure Clan Mail',
+      equipment: {
+        tool: u.equipment?.tool || { name: u.weapon?.name || (u.weapon?.heldModelName ? `${u.weapon.heldModelName.toUpperCase()} Blade` : 'Mythril Broadsword'), tier: u.grade || 'B', slot: 'tool' },
+        offhand: u.equipment?.offhand || { name: u.equipment?.shield?.name || (u.className === 'Knight' ? 'Kite Shield' : u.className === 'Paladin' ? 'Holy Aegis' : 'Focus Orb'), tier: 'B', slot: 'offhand' },
+        head: u.equipment?.head || { name: `${u.className} Visor`, tier: 'B', slot: 'head' },
+        chest: u.equipment?.chest || { name: 'Azure Clan Mail', tier: 'A', slot: 'chest' },
+        legs: u.equipment?.legs || { name: `${u.className} Greaves`, tier: 'B', slot: 'legs' },
+        finger: u.equipment?.finger || { name: 'Band of Set Heritage', tier: 'A', slot: 'finger' }
+      },
       seed: String(u.seed)
     }));
 
@@ -447,6 +489,32 @@ class TacticsGame {
       this.turnCount++;
       this.activeUnit.hasMoved = false;
       this.activeUnit.hasActed = false;
+
+      // Status Effects incapacitation check (Frozen / Sleeping)
+      const rawStatus = (this.activeUnit.status || '').toLowerCase();
+      if (rawStatus === 'frozen' || rawStatus === 'sleeping' || rawStatus === 'sleep') {
+        const isFrozen = rawStatus === 'frozen';
+        const statusLabel = isFrozen ? '❄️ FROZEN — TURN SKIPPED' : '💤 SLEEPING — TURN SKIPPED';
+        this.tacticalHud.addLog(
+          `✦ ${this.activeUnit.name} is ${isFrozen ? 'frozen solid' : 'fast asleep'} and must skip their turn!`,
+          'combat'
+        );
+        const headAnchor = this.stageUnitManager.getUnitScreenAnchor(this.activeUnit.id, this.isometricBoard);
+        this.tacticalHud.spawnFloatingText(headAnchor, statusLabel, 'crit', this.projectWorldToScreen);
+
+        this.activeUnit.status = null;
+        this.stageUnitManager.setUnitStatus?.(this.activeUnit.id, null);
+        this.turnManager.endTurn(this.activeUnit, false, false);
+        this.isometricBoard.setActiveUnitTile(null, null);
+
+        this._isProcessingTurn = false;
+        if (this._turnTimer) clearTimeout(this._turnTimer);
+        this._turnTimer = setTimeout(() => {
+          if (this.matchId !== currentMatchId) return;
+          this.advanceTurn();
+        }, 450);
+        return;
+      }
 
       // Pan camera to focus on active unit
       const unitWorldPos = this.isometricBoard.tileToWorld(
@@ -559,6 +627,35 @@ class TacticsGame {
       `${this.activeUnit.name} moved to (${matchedPathEntry.x}, ${matchedPathEntry.z}).`,
       'info'
     );
+
+    // Check if there is a loot bag at the destination tile
+    if (this.stageUnitManager?.pickupLootBag) {
+      const loot = await this.stageUnitManager.pickupLootBag(this.activeUnit.x, this.activeUnit.z, this.activeUnit);
+      if (loot) {
+        const isPlayerClan = this.activeUnit.team === 'blue' || this.activeUnit.team === 'azure';
+        if (isPlayerClan) {
+          const orbsEarned = loot.orbs || 35;
+          this.playerOrbs += orbsEarned;
+          this.statsSummary.orbsWon += orbsEarned;
+          if (loot.item) {
+            this.playerInventory.unshift(loot.item);
+          }
+          const headAnchor = this.stageUnitManager.getUnitScreenAnchor(this.activeUnit.id, this.isometricBoard);
+          this.tacticalHud.spawnFloatingText(
+            headAnchor,
+            `✦ LOOT POUCH: +${orbsEarned} ORBS!`,
+            'orbs',
+            this.projectWorldToScreen
+          );
+          this.tacticalHud.addLog(
+            `✦ LOOT CLAIMED: ${this.activeUnit.name} picked up a Loot Pouch (+${orbsEarned} Orbs)!`,
+            'loot'
+          );
+          this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+          this._syncForgeRoster();
+        }
+      }
+    }
 
     // If unit has already acted, proceed to facing compass
     if (this.activeUnit.hasActed) {
@@ -710,12 +807,33 @@ class TacticsGame {
       if (outcome.blocked) combatMsg += ' [SHIELD BLOCKED -65%]';
       this.tacticalHud.addLog(combatMsg, 'combat');
 
-      if (outcome.defenderDead) {
+      if (outcome.defenderDead || (defender.hp !== undefined && defender.hp <= 0)) {
         this.tacticalHud.addLog(`💀 ${defender.name} was defeated!`, 'combat');
+        const defX = defender.x ?? defender.gridX;
+        const defZ = defender.z ?? defender.gridZ;
+        const lootData = outcome.lootDrop || { orbs: 35, x: defX, z: defZ };
+        this.stageUnitManager.spawnLootBag?.(defX, defZ, this.isometricBoard, lootData);
+        this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${defX}, ${defZ})!`, 'loot');
       }
     } else {
       this.tacticalHud.spawnFloatingText(headAnchor, 'MISS', 'miss', this.projectWorldToScreen);
       this.tacticalHud.addLog(`${attacker.name}'s attack missed ${defender.name}!`, 'combat');
+    }
+
+    // Apply status effects if triggered
+    if (outcome.statusApplied) {
+      defender.status = outcome.statusApplied;
+      this.stageUnitManager.setUnitStatus?.(defender.id, outcome.statusApplied);
+      const statusIcons = {
+        frozen: '❄️ FROZEN!',
+        sleeping: '💤 ASLEEP!',
+        confused: '💫 CONFUSED!',
+        float: '🪽 FLOAT!',
+        floating: '🪽 FLOAT!'
+      };
+      const statusText = statusIcons[outcome.statusApplied.toLowerCase()] || `⚡ ${outcome.statusApplied.toUpperCase()}!`;
+      this.tacticalHud.spawnFloatingText(headAnchor, statusText, 'crit', this.projectWorldToScreen);
+      this.tacticalHud.addLog(`✦ STATUS APPLIED: ${defender.name} is now ${statusText}`, 'combat');
     }
 
     // Award Set Orbs for combat
@@ -888,6 +1006,37 @@ class TacticsGame {
       this.isometricBoard.setActiveUnitTile(aiUnit.gridX, aiUnit.gridZ);
       const newPos = this.isometricBoard.tileToWorld(aiUnit.gridX, aiUnit.gridZ, aiUnit.elevation);
       this.tacticalCamera.setFocus(newPos.x, newPos.y, newPos.z);
+
+      // Check if AI stepped on a loot bag
+      if (this.stageUnitManager?.pickupLootBag) {
+        const loot = await this.stageUnitManager.pickupLootBag(aiUnit.x, aiUnit.z, aiUnit);
+        if (loot) {
+          const isPlayerClan = aiUnit.team === 'blue' || aiUnit.team === 'azure';
+          if (isPlayerClan) {
+            const orbsEarned = loot.orbs || 35;
+            this.playerOrbs += orbsEarned;
+            this.statsSummary.orbsWon += orbsEarned;
+            if (loot.item) {
+              this.playerInventory.unshift(loot.item);
+            }
+            const headAnchor = this.stageUnitManager.getUnitScreenAnchor(aiUnit.id, this.isometricBoard);
+            this.tacticalHud.spawnFloatingText(
+              headAnchor,
+              `✦ LOOT POUCH: +${orbsEarned} ORBS!`,
+              'orbs',
+              this.projectWorldToScreen
+            );
+            this.tacticalHud.addLog(
+              `✦ LOOT CLAIMED: ${aiUnit.name} picked up a Loot Pouch (+${orbsEarned} Orbs)!`,
+              'loot'
+            );
+            this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+            this._syncForgeRoster();
+          } else {
+            this.tacticalHud.addLog(`☠ Loot bag seized by enemy ${aiUnit.name}!`, 'combat');
+          }
+        }
+      }
     }
 
     // Short readable tactical pause
@@ -941,6 +1090,23 @@ class TacticsGame {
       outcome.critical = outcome.crit;
       outcome.isHeal = outcome.heal > 0;
 
+      // Status effects applied by AI
+      if (outcome.statusApplied) {
+        target.status = outcome.statusApplied;
+        this.stageUnitManager.setUnitStatus?.(target.id, outcome.statusApplied);
+        const statusIcons = {
+          frozen: '❄️ FROZEN!',
+          sleeping: '💤 ASLEEP!',
+          confused: '💫 CONFUSED!',
+          float: '🪽 FLOAT!',
+          floating: '🪽 FLOAT!'
+        };
+        const statusText = statusIcons[outcome.statusApplied.toLowerCase()] || `⚡ ${outcome.statusApplied.toUpperCase()}!`;
+        const headAnchor = this.stageUnitManager.getUnitScreenAnchor(target.id, this.isometricBoard);
+        this.tacticalHud.spawnFloatingText(headAnchor, statusText, 'crit', this.projectWorldToScreen);
+        this.tacticalHud.addLog(`✦ STATUS APPLIED: ${target.name} is now ${statusText}`, 'combat');
+      }
+
       await this.stageUnitManager.animateCombatAction(
         aiUnit,
         target,
@@ -977,8 +1143,13 @@ class TacticsGame {
         if (outcome.crit) msg += ' [CRITICAL!]';
         this.tacticalHud.addLog(msg, 'combat');
 
-        if (outcome.defenderDead) {
+        if (outcome.defenderDead || (target.hp !== undefined && target.hp <= 0)) {
           this.tacticalHud.addLog(`💀 ${target.name} fell in combat!`, 'combat');
+          const tgtX = target.x ?? target.gridX;
+          const tgtZ = target.z ?? target.gridZ;
+          const lootData = outcome.lootDrop || { orbs: 35, x: tgtX, z: tgtZ };
+          this.stageUnitManager.spawnLootBag?.(tgtX, tgtZ, this.isometricBoard, lootData);
+          this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${tgtX}, ${tgtZ})!`, 'loot');
         }
       } else {
         this.tacticalHud.spawnFloatingText(
@@ -1189,7 +1360,7 @@ class TacticsGame {
 
           // Live hot-swap 3D idle weapon mesh on stage
           if (this.stageUnitManager?.setUnitWeapon) {
-            this.stageUnitManager.setUnitWeapon(unit.id, newSpec.heldModelName, unit.team);
+            this.stageUnitManager.setUnitWeapon(unit.id, newSpec.heldModelName, unit.team, item.finishTier);
           }
 
           this.tacticalHud.addLog(
@@ -1204,6 +1375,67 @@ class TacticsGame {
         }
       }
     }
+  }
+
+  handleBoostItem(itemOrIndex) {
+    let item = null;
+    let index = -1;
+    if (typeof itemOrIndex === 'object' && itemOrIndex !== null) {
+      item = itemOrIndex;
+      index = this.playerInventory.indexOf(item);
+    } else {
+      index = itemOrIndex;
+      item = this.playerInventory[index];
+    }
+
+    if (!item) return;
+
+    if (this.playerOrbs < 75) {
+      this.tacticalHud.addLog('⚠️ Insufficient Set Orbs! Boosting requires 75 Orbs.', 'system');
+      return;
+    }
+
+    if ((item.stars || 0) >= 5) {
+      this.tacticalHud.addLog(`✦ ${item.name} is already max rank (+5 ★)!`, 'system');
+      return;
+    }
+
+    this.playerOrbs -= 75;
+    const upgradedItem = boostItemWithOrbs(item, 75) || item;
+
+    // If the item is currently equipped to a unit, update that unit's weapon stats/stars/finishTier
+    // AND call this.stageUnitManager.setUnitWeapon?.(unit.id, unit.weapon?.heldModelName, unit.team, item.finishTier)
+    if (upgradedItem.equippedTo) {
+      const unit = this.units.find((u) => u.id === upgradedItem.equippedTo);
+      if (unit) {
+        if (unit.weapon) {
+          unit.weapon.stars = upgradedItem.stars;
+          unit.weapon.finishTier = upgradedItem.finishTier;
+          unit.weapon.elementalPrefix = upgradedItem.elementalPrefix;
+          if (upgradedItem.statsBonus) {
+            unit.weapon.statsBonus = upgradedItem.statsBonus;
+          }
+        }
+        unit.stars = upgradedItem.stars;
+        unit.finishTier = upgradedItem.finishTier;
+        unit.elementalPrefix = upgradedItem.elementalPrefix;
+
+        const heldModel = unit.weapon?.heldModelName || unit.heldModelName || 'sword';
+        this.stageUnitManager.setUnitWeapon?.(unit.id, heldModel, unit.team, upgradedItem.finishTier);
+
+        if (this.activeUnit === unit) {
+          this.tacticalHud.setActiveUnit(unit, this.currentMode, this.selectedAbility);
+        }
+      }
+    }
+
+    this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+    this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
+    this.tacticalHud.addLog(
+      `✦ BOOSTED: ${upgradedItem.name} [${upgradedItem.elementalPrefix || 'ASTRAL'}] upgraded to ★ +${upgradedItem.stars} (${upgradedItem.finishTier} finish)!`,
+      'loot'
+    );
+    this._syncForgeRoster();
   }
 
   /* ========================================================================

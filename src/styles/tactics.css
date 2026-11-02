@@ -2024,6 +2024,365 @@ html, body {
 }
 
 /* ==========================================================================
+   10. Raid Boss Mode, Status Effect Badges, Item Booster & 6-Slot Paperdoll
+   ========================================================================== */
+
+/* Top Bar Raid Toggle Button */
+.hud-btn.raid-toggle-btn {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: #fda4af;
+  background: rgba(225, 29, 72, 0.1);
+  transition: all var(--transition-fast);
+}
+
+.hud-btn.raid-toggle-btn:hover {
+  background: rgba(225, 29, 72, 0.25);
+  border-color: var(--crimson);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.5);
+}
+
+.hud-btn.raid-toggle-btn.raid-active {
+  background: linear-gradient(135deg, rgba(225, 29, 72, 0.4), rgba(245, 158, 11, 0.35));
+  border-color: #ffd700;
+  color: #fef08a;
+  box-shadow: 0 0 16px rgba(244, 63, 94, 0.8), 0 0 8px rgba(245, 158, 11, 0.7);
+  animation: raidBossButtonPulse 1.2s infinite alternate ease-in-out;
+  font-weight: 800;
+}
+
+@keyframes raidBossButtonPulse {
+  0% {
+    box-shadow: 0 0 8px rgba(244, 63, 94, 0.5), 0 0 4px rgba(245, 158, 11, 0.4);
+    border-color: #f43f5e;
+    transform: scale(1);
+  }
+  100% {
+    box-shadow: 0 0 20px rgba(244, 63, 94, 0.95), 0 0 12px rgba(255, 215, 0, 0.9);
+    border-color: #fef08a;
+    transform: scale(1.04);
+  }
+}
+
+/* Turn ribbon Raid boss crown & card */
+.turn-boss-crown.raid-crown {
+  background: linear-gradient(135deg, #e11d48, #b45309);
+  border: 1px solid #ffd700;
+  color: #fef08a;
+  box-shadow: 0 0 10px rgba(225, 29, 72, 0.8);
+  animation: raidCrownPulse 1s infinite alternate ease-in-out;
+}
+
+@keyframes raidCrownPulse {
+  0% { box-shadow: 0 0 6px rgba(225, 29, 72, 0.6); }
+  100% { box-shadow: 0 0 14px rgba(255, 215, 0, 0.9); }
+}
+
+.turn-card.boss-card.raid-card {
+  border-left: 4px solid #ffd700;
+  border-top: 2px solid #f43f5e;
+  background: linear-gradient(180deg, rgba(225, 29, 72, 0.25), rgba(12, 16, 24, 0.95));
+}
+
+/* Overhead Nameplate Status Effect Badges */
+.unit-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 8px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 2px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.unit-status-badge.status-frozen {
+  background: rgba(14, 165, 233, 0.25);
+  border: 1px solid #38bdf8;
+  color: #e0f2fe;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+  animation: frozenShimmer 1.5s infinite alternate ease-in-out;
+}
+
+@keyframes frozenShimmer {
+  0% { box-shadow: 0 0 4px rgba(56, 189, 248, 0.4); }
+  100% { box-shadow: 0 0 12px rgba(56, 189, 248, 0.9); border-color: #bae6fd; }
+}
+
+.unit-status-badge.status-sleeping {
+  background: rgba(99, 102, 241, 0.25);
+  border: 1px solid #818cf8;
+  color: #e0e7ff;
+  box-shadow: 0 0 8px rgba(129, 140, 248, 0.5);
+  animation: sleepingGlow 2s infinite alternate ease-in-out;
+}
+
+@keyframes sleepingGlow {
+  0% { opacity: 0.75; transform: scale(0.97); }
+  100% { opacity: 1; transform: scale(1.03); }
+}
+
+.unit-status-badge.status-confused {
+  background: rgba(234, 179, 8, 0.22);
+  border: 1px solid #eab308;
+  color: #fef08a;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.5);
+  animation: confusePulse 2s infinite alternate ease-in-out;
+}
+
+@keyframes confusePulse {
+  0% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.4); }
+  100% { box-shadow: 0 0 12px rgba(234, 179, 8, 0.9); border-color: #fef08a; }
+}
+
+.unit-status-badge.status-floating {
+  background: rgba(52, 211, 153, 0.22);
+  border: 1px solid #34d399;
+  color: #d1fae5;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
+  animation: floatBob 1.8s infinite alternate ease-in-out;
+}
+
+@keyframes floatBob {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-2px); }
+}
+
+/* Overhead Raid Sovereign pill */
+.overhead-pill.crimson-pill.raid-pill {
+  border-color: #ffd700;
+  border-top: 2px solid #ffd700;
+  border-bottom: 2px solid #f43f5e;
+  background: linear-gradient(135deg, rgba(65, 12, 24, 0.98), rgba(90, 20, 30, 0.98));
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.8), 0 0 12px rgba(244, 63, 94, 0.8);
+  animation: raidPillBlaze 1.4s infinite alternate ease-in-out;
+}
+
+@keyframes raidPillBlaze {
+  0% {
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.6), 0 0 8px rgba(244, 63, 94, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 24px rgba(255, 215, 0, 0.95), 0 0 16px rgba(244, 63, 94, 0.9);
+  }
+}
+
+/* Armory Booster & Star Ratings */
+.item-stars-badge {
+  color: var(--text-gold);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+}
+
+.item-card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.elemental-prefix-badge {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+.elemental-prefix-badge.prefix-boreal {
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.2);
+}
+
+.elemental-prefix-badge.prefix-astral {
+  color: #c084fc;
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  box-shadow: 0 0 6px rgba(168, 85, 247, 0.2);
+}
+
+.elemental-prefix-badge.prefix-chaotic {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+}
+
+.elemental-prefix-badge.prefix-celestial {
+  color: #fef08a;
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  box-shadow: 0 0 6px rgba(234, 179, 8, 0.2);
+}
+
+.elemental-prefix-badge.prefix-fiery {
+  color: #fb923c;
+  background: rgba(249, 115, 22, 0.15);
+  border: 1px solid rgba(249, 115, 22, 0.4);
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.2);
+}
+
+.finish-tier-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-mythril);
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+.finish-tier-badge.finish-gold {
+  color: #fef08a;
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.finish-tier-badge.finish-adamantite {
+  color: #67e8f9;
+  background: rgba(6, 182, 212, 0.2);
+  border-color: #22d3ee;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.3);
+}
+
+.finish-tier-badge.finish-mythril {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.finish-tier-badge.finish-bronze {
+  color: #d97706;
+  background: rgba(180, 83, 9, 0.15);
+  border-color: rgba(180, 83, 9, 0.4);
+}
+
+.finish-tier-badge.finish-iron {
+  color: #cbd5e1;
+  background: rgba(100, 116, 139, 0.15);
+  border-color: rgba(100, 116, 139, 0.4);
+}
+
+.btn-boost-item {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(217, 119, 6, 0.3));
+  border: 1px solid var(--border-gold);
+  color: var(--text-gold-bright);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn-boost-item:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.35), rgba(217, 119, 6, 0.5));
+  border-color: #fef08a;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+  transform: translateY(-1px);
+}
+
+.btn-boost-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+
+/* 6-Slot Set.world Equipment Paperdoll */
+.roster-paperdoll-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.paperdoll-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-gold);
+  letter-spacing: 0.06em;
+}
+
+.paperdoll-sub {
+  font-size: 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.paperdoll-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.paperdoll-slot {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: all var(--transition-fast);
+}
+
+.paperdoll-slot:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: var(--azure);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.paperdoll-slot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.slot-label {
+  font-size: 8px;
+  font-weight: 800;
+  color: var(--azure);
+  letter-spacing: 0.04em;
+}
+
+.paperdoll-slot-name {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.paperdoll-slot-meta {
+  font-size: 8px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
    Responsive Adaptations
    ========================================================================== */
 

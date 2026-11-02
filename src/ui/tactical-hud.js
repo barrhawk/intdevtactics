@@ -19,6 +19,7 @@ export class TacticalHUD {
    * @param {(deltaDegOrDir: number|string) => void} [callbacks.onRotateCamera]
    * @param {(deltaOrDir: number|string) => void} [callbacks.onZoomCamera]
    * @param {() => void} [callbacks.onToggleAutoBattle]
+   * @param {() => void} [callbacks.onToggleRaidBoss]
    * @param {() => void} [callbacks.onNewSeed]
    * @param {() => void} [callbacks.onOpenForge]
    */
@@ -37,6 +38,7 @@ export class TacticalHUD {
       compassLabel: 'SE 135°',
       autoBattle: false,
       turnNumber: 1,
+      raidBossMode: false,
     };
     this.activeUnit = null;
     this.currentMode = 'standby'; // 'standby' | 'menu' | 'move' | 'act' | 'wait' | 'animating'
@@ -82,6 +84,9 @@ export class TacticalHUD {
           <span class="orb-sparkle">✦</span>
           <span id="hud-orbs-count">450</span> ORBS
         </div>
+        <button class="hud-btn raid-toggle-btn" id="btn-toggle-raid" title="Toggle 250x Set.world Raid Boss Mode">
+          <span id="hud-raid-label">[☠ Raid: OFF]</span>
+        </button>
         <button class="hud-btn" id="btn-camera-rot" title="Rotate Camera 45° [Q / E]">
           <span>[Q/E] ↺ 45°</span>
           <span id="hud-compass-label" style="color: var(--azure); font-size: 10px;">SE 135°</span>
@@ -188,6 +193,13 @@ export class TacticalHUD {
 
   _bindEvents() {
     // Top Bar button clicks
+    const btnRaid = this.elements.topBar.querySelector('#btn-toggle-raid');
+    if (btnRaid) {
+      btnRaid.addEventListener('click', () => {
+        this.callbacks.onToggleRaidBoss?.();
+      });
+    }
+
     this.elements.topBar.querySelector('#btn-camera-rot').addEventListener('click', () => {
       this.callbacks.onRotateCamera?.(45);
     });
@@ -284,7 +296,7 @@ export class TacticalHUD {
   /**
    * Set Top Bar state (seed, orbs, camera, auto-battle, etc.)
    */
-  setHeaderState({ seed, orbs, cameraStep, compassLabel, autoBattle, turnNumber } = {}) {
+  setHeaderState({ seed, orbs, cameraStep, compassLabel, autoBattle, turnNumber, raidBossMode } = {}) {
     if (seed !== undefined) {
       this.headerState.seed = seed;
       const seedEl = this.container.querySelector('#hud-seed-badge');
@@ -311,6 +323,20 @@ export class TacticalHUD {
         } else {
           autoBtn.classList.remove('active');
           autoLbl.textContent = '[A] Auto: OFF';
+        }
+      }
+    }
+    if (raidBossMode !== undefined) {
+      this.headerState.raidBossMode = raidBossMode;
+      const raidBtn = this.container.querySelector('#btn-toggle-raid');
+      const raidLbl = this.container.querySelector('#hud-raid-label');
+      if (raidBtn && raidLbl) {
+        if (raidBossMode) {
+          raidBtn.classList.add('active', 'raid-active');
+          raidLbl.textContent = '☠ [Raid: 250x BOSS]';
+        } else {
+          raidBtn.classList.remove('active', 'raid-active');
+          raidLbl.textContent = '[☠ Raid: OFF]';
         }
       }
     }
@@ -380,16 +406,17 @@ export class TacticalHUD {
       const isActive = activeId && (uId === activeId || idx === 0);
       const grade = (unit.grade || 'B').toUpperCase();
       const ctVal = Math.min(100, Math.max(0, Math.round(unit.ct ?? 100)));
-      const isBoss = !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
+      const isRaid = !!(unit.isRaidBoss);
+      const isBoss = isRaid || !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
       const rawWeapon = unit.heldModelName || unit.weapon?.heldModelName || unit.weaponType || unit.weapon?.weaponType || unit.tool?.name || '';
       const weaponTag = rawWeapon ? rawWeapon.toUpperCase() : '';
 
       const card = document.createElement('div');
-      card.className = `turn-card ${teamClass} ${isActive ? 'active' : ''} ${isBoss ? 'boss-card' : ''}`;
+      card.className = `turn-card ${teamClass} ${isActive ? 'active' : ''} ${isRaid ? 'boss-card raid-card' : isBoss ? 'boss-card' : ''}`;
       card.innerHTML = `
         <div class="turn-card-header">
           <span class="turn-team-badge">${isActive ? '✦ TURN' : teamLabel}</span>
-          ${isBoss ? '<span class="turn-boss-crown">★ BOSS</span>' : `<span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>`}
+          ${isRaid ? '<span class="turn-boss-crown raid-crown">☠ 250x BOSS</span>' : isBoss ? '<span class="turn-boss-crown">★ BOSS</span>' : `<span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>`}
         </div>
         <div class="turn-card-body">
           <span class="turn-unit-class" title="${unit.name || 'Unit'}">${uClass}</span>
@@ -968,15 +995,31 @@ export class TacticalHUD {
       }
 
       const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
-      const isBoss = !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
+      const isRaid = !!(unit.isRaidBoss);
+      const isBoss = isRaid || !!(unit.isBoss || (unit.team === 'crimson' && (unit.rank === 'COMMANDER' || unit.rank === 'WARLORD')));
       const uClass = unit.className || unit.job || unit.class || 'Warrior';
       const rawWeapon = unit.heldModelName || unit.weapon?.heldModelName || unit.weaponType || unit.weapon?.weaponType || unit.tool?.name || '';
       const weaponTag = rawWeapon ? `[${rawWeapon.toUpperCase()}]` : '';
 
+      // Status effect pill: ❄️ FROZEN, 💤 SLEEP, 💫 CONFUSE, 🪽 FLOAT
+      const statusKey = (unit.status || '').toLowerCase();
+      let statusMarkup = '';
+      if (statusKey === 'frozen') {
+        statusMarkup = '<span class="unit-status-badge status-frozen">❄️ FROZEN</span>';
+      } else if (statusKey === 'sleeping' || statusKey === 'sleep') {
+        statusMarkup = '<span class="unit-status-badge status-sleeping">💤 SLEEP</span>';
+      } else if (statusKey === 'confused' || statusKey === 'confuse') {
+        statusMarkup = '<span class="unit-status-badge status-confused">💫 CONFUSE</span>';
+      } else if (statusKey === 'floating' || statusKey === 'float') {
+        statusMarkup = '<span class="unit-status-badge status-floating">🪽 FLOAT</span>';
+      } else if (unit.status) {
+        statusMarkup = `<span class="unit-status-badge">${String(unit.status).toUpperCase()}</span>`;
+      }
+
       const activeId = this.activeUnit ? (this.activeUnit.id || this.activeUnit.unitId) : null;
       const isActive = activeId && (unitId === activeId);
 
-      const classNameAttr = `unit-overhead ${isAzure ? 'azure' : 'crimson'} ${isBoss ? 'boss' : ''} ${isActive ? 'active' : ''}`;
+      const classNameAttr = `unit-overhead ${isAzure ? 'azure' : 'crimson'} ${isRaid ? 'boss raid-boss' : isBoss ? 'boss' : ''} ${isActive ? 'active' : ''}`;
       if (!el) {
         el = document.createElement('div');
         el.className = classNameAttr;
@@ -1003,6 +1046,7 @@ export class TacticalHUD {
             <span class="overhead-unit-name">${unit.name || 'Hero'}</span>
             <span class="overhead-class-badge">${uClass}</span>
             ${weaponTag ? `<span class="overhead-weapon-tag">${weaponTag}</span>` : ''}
+            ${statusMarkup}
           </div>
           <div class="overhead-hp-bar azure-bar">
             <div class="overhead-hp-fill azure-fill ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
@@ -1012,7 +1056,9 @@ export class TacticalHUD {
         // Crimson Order Enemies: Jagged dark-obsidian & blood-crimson frame with angled/horned corners,
         // crimson-orange HP fill, enemy rank/class badge, and weapon icon
         let roleBadge = `⚔ VANGUARD`;
-        if (isBoss) {
+        if (isRaid) {
+          roleBadge = `☠ 250x RAID SOVEREIGN`;
+        } else if (isBoss) {
           roleBadge = `☠ ${unit.name || 'WARLORD'} [BOSS]`;
         } else if (unit.rank === 'HEXER' || /mage|hexer|mesmer|wizard|arcane/i.test(uClass)) {
           roleBadge = `✦ ${unit.name || 'HEXER'}`;
@@ -1026,9 +1072,10 @@ export class TacticalHUD {
 
         el.innerHTML = `
           ${isActive ? '<span class="overhead-crown crimson-crown">⚔</span>' : ''}
-          <div class="overhead-pill crimson-pill ${isBoss ? 'boss-pill' : ''}">
+          <div class="overhead-pill crimson-pill ${isRaid ? 'boss-pill raid-pill' : isBoss ? 'boss-pill' : ''}">
             <span class="enemy-role-badge">${roleBadge}</span>
             ${weaponTag ? `<span class="enemy-weapon-badge">${weaponTag}</span>` : ''}
+            ${statusMarkup}
           </div>
           <div class="overhead-hp-bar crimson-bar">
             <div class="overhead-hp-fill crimson-fill ${hpPct <= 25 ? 'danger' : ''}" style="width: ${hpPct}%;"></div>
