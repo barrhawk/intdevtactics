@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createWaterSwell, createWaterRipples, sampleWaterField } from '@engine/debug/water-simulation';
 import { createMarbleBake, createMarbleMaterial } from '@engine/debug/marble-material';
+import { WaterSurface, MAX_WATER_POSTS } from './water-surface.js';
 
 export const BOARD_SIZE = 10;
 export const TILE_SIZE = 24;
@@ -190,6 +191,10 @@ export class IsometricBoard {
     this.marbleBake = null;
     this.veinedMarbleMaterial = null;
 
+    // Submerged / emergent veined marble river posts along the waterway
+    this.riverPosts = [];
+    this.riverPostMeshes = [];
+
     // Battlefield Rune Switches
     this.runeSwitches = new Map();
     this.floodgateRaised = false;
@@ -208,6 +213,9 @@ export class IsometricBoard {
 
     // Setup FFT water swell, ripples, and surface mesh
     this._initWaterSimulation(seed);
+
+    // Setup 4 submerged/emergent veined marble river posts
+    this._initRiverPosts();
 
     // Setup 3D battlefield rune switches
     this._initRuneSwitches();
@@ -281,6 +289,16 @@ export class IsometricBoard {
         if (Array.isArray(mesh.material)) {
           mesh.material[2] = this.veinedMarbleMaterial;
         }
+      }
+    }
+
+    // Apply veined marble material to 3D river posts
+    if (this.riverPostMeshes) {
+      for (const pMesh of this.riverPostMeshes) {
+        pMesh.material = this.veinedMarbleMaterial;
+        pMesh.traverse((child) => {
+          if (child.isMesh) child.material = this.veinedMarbleMaterial;
+        });
       }
     }
   }
@@ -1036,104 +1054,99 @@ export class IsometricBoard {
   }
 
   _initWaterSimulation(seed) {
-    this.waterSwell = createWaterSwell({
-      size: 32,
-      domain: 240,
-      windX: 1,
-      windZ: 0.3,
-      windSpeed: 10,
-      gravity: 98,
-      smallWave: 0.8,
-      choppiness: 0.8,
-      targetHeight: 1.2,
-      repeatPeriod: 20,
-      foamThreshold: 0.45,
-      foamStrength: 1.2,
+    // Modular GPU Water Surface with real-time caustic mesh projection & post raymarching
+    this.waterSurface = new WaterSurface(this.boardGroup, {
+      width: 240,
+      depth: 48,
+      y: 0.08,
       seed: typeof seed === 'number' ? seed : 42
     });
 
-    this.waterRipples = createWaterRipples({
-      size: 32,
-      domain: 240,
-      propagation: 0.45,
-      damping: 0.985,
-      sponge: 3
-    });
+    // Backward-compatibility aliases
+    this.waterSurfaceMesh = this.waterSurface.mesh;
+    this.waterSurfaceMaterial = this.waterSurface.material;
+    this.waterSwell = this.waterSurface.waterSwell;
+    this.waterRipples = this.waterSurface.waterRipples;
+    this.waterSwellTexture = this.waterSurface.waterSwellTexture;
+    this.waterRippleTexture = this.waterSurface.waterRippleTexture;
+    this.activeWaterRipples = this.waterSurface.activeWaterRipples;
+    this.waterBasePositions = this.waterSurface.basePositions;
+  }
 
-    this.activeWaterRipples = [];
+  /**
+   * Initializes 4 submerged/emergent veined marble posts along the waterway (z = 4.5):
+   * (1, 4.5), (3, 4.5), (6, 4.5), (8, 4.5), passing normalized UV centers and heights to waterSurface.
+   */
+  _initRiverPosts() {
+    this.riverPosts = [];
+    this.riverPostMeshes = [];
 
-    // Create DataTextures for swell displacement and ripples
-    this.waterSwellTexture = new THREE.DataTexture(
-      this.waterSwell.heightDisplacement,
-      this.waterSwell.size,
-      this.waterSwell.size,
-      THREE.RGBAFormat,
-      THREE.FloatType
-    );
-    this.waterSwellTexture.wrapS = THREE.RepeatWrapping;
-    this.waterSwellTexture.wrapT = THREE.RepeatWrapping;
-    this.waterSwellTexture.minFilter = THREE.LinearFilter;
-    this.waterSwellTexture.magFilter = THREE.LinearFilter;
-    this.waterSwellTexture.needsUpdate = true;
+    const postDefs = [
+      { gridX: 1, gridZ: 4.5, emergent: true,  topY: 2.2, height: 16 },
+      { gridX: 3, gridZ: 4.5, emergent: false, topY: -0.6, height: 13 },
+      { gridX: 6, gridZ: 4.5, emergent: false, topY: -0.6, height: 13 },
+      { gridX: 8, gridZ: 4.5, emergent: true,  topY: 2.2, height: 16 }
+    ];
 
-    this.waterRippleTexture = new THREE.DataTexture(
-      this.waterRipples.field,
-      this.waterRipples.size,
-      this.waterRipples.size,
-      THREE.RGBAFormat,
-      THREE.FloatType
-    );
-    this.waterRippleTexture.wrapS = THREE.ClampToEdgeWrapping;
-    this.waterRippleTexture.wrapT = THREE.ClampToEdgeWrapping;
-    this.waterRippleTexture.minFilter = THREE.LinearFilter;
-    this.waterRippleTexture.magFilter = THREE.LinearFilter;
-    this.waterRippleTexture.needsUpdate = true;
+    const postData = [];
+    for (const def of postDefs) {
+      const worldX = (def.gridX - (BOARD_SIZE - 1) / 2) * TILE_SIZE;
+      const worldZ = (def.gridZ - (BOARD_SIZE - 1) / 2) * TILE_SIZE;
+      const halfX = 2.4;
+      const halfZ = 2.4;
 
-    // Subdivided water surface plane over the crystal stream channel
-    // River spans X: [-120, 120] (width 240), Z: [-24, 24] (width 48), Y: 0.08
-    const riverGeo = new THREE.PlaneGeometry(240, 48, 48, 12);
-    riverGeo.rotateX(-Math.PI / 2);
+      // River plane spans X: [-120, 120] (domain 240), Z: [-24, 24] (domain 48)
+      const uvX = (worldX + 120) / 240;
+      const uvZ = (worldZ + 24) / 48;
 
-    const waterMaterial = new THREE.ShaderMaterial({
-      vertexShader: WATER_VERTEX_SHADER,
-      fragmentShader: WATER_FRAGMENT_SHADER,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      uniforms: {
-        uTime: { value: 0 },
-        uSwellTex: { value: this.waterSwellTexture },
-        uRippleTex: { value: this.waterRippleTexture },
-        uOpacity: { value: 0.85 },
-        sunDirection: { value: new THREE.Vector3(-0.5, 0.62, 0.42).normalize() },
-        sunColor: { value: new THREE.Color(0xfff4dc) },
-        seabedColor: { value: new THREE.Color(0xfbf6e8) },
-        skyHorizonColor: { value: new THREE.Color(0xe6f6fb) },
-        skyZenithColor: { value: new THREE.Color(0x9fd8f2) },
-        foamColor: { value: new THREE.Color(0xffffff) },
-        foamShadeColor: { value: new THREE.Color(0xc4e4ee) }
+      postData.push({
+        x: worldX,
+        z: worldZ,
+        halfX,
+        halfZ,
+        top: def.topY,
+        height: def.height,
+        uvX,
+        uvZ
+      });
+
+      // Create physical 3D veined marble pillar mesh in the river channel
+      const geo = new THREE.CylinderGeometry(2.2, 2.5, def.height, 16);
+      const mat = this.veinedMarbleMaterial || this.materials.stone;
+      const mesh = new THREE.Mesh(geo, mat);
+      const centerY = def.topY - def.height * 0.5;
+      mesh.position.set(worldX, centerY, worldZ);
+      mesh.name = `RiverPost_${def.gridX}_${def.gridZ}`;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      // Add ornamental capital ring on emergent posts
+      if (def.emergent) {
+        const capGeo = new THREE.CylinderGeometry(2.8, 2.3, 1.2, 16);
+        const capMesh = new THREE.Mesh(capGeo, mat);
+        capMesh.position.y = def.height * 0.5 - 0.6;
+        mesh.add(capMesh);
       }
-    });
 
-    // Provide .opacity getter/setter wired to uOpacity uniform so existing code accessing .opacity works seamlessly
-    Object.defineProperty(waterMaterial, 'opacity', {
-      get() {
-        return this.uniforms.uOpacity.value;
-      },
-      set(val) {
-        this.uniforms.uOpacity.value = val;
-      },
-      configurable: true
-    });
+      this.boardGroup.add(mesh);
+      this.riverPostMeshes.push(mesh);
+      this.riverPosts.push({ ...def, worldX, worldZ, uvX, uvZ, mesh });
+    }
 
-    this.waterSurfaceMaterial = waterMaterial;
+    if (this.waterSurface) {
+      this.waterSurface.setPosts(postData);
+    }
+  }
 
-    this.waterSurfaceMesh = new THREE.Mesh(riverGeo, this.waterSurfaceMaterial);
-    this.waterSurfaceMesh.position.set(0, 0.08, 0);
-    this.waterSurfaceMesh.name = 'AnimatedWaterSurface';
-    this.boardGroup.add(this.waterSurfaceMesh);
-
-    this.waterBasePositions = riverGeo.attributes.position.array.slice();
+  /**
+   * Executes the real-time GPU Caustic Mesh projection pass.
+   * main.js can call this in the render loop before scene rendering.
+   * @param {THREE.WebGLRenderer} renderer
+   */
+  updateWaterCaustics(renderer) {
+    if (this.waterSurface && typeof this.waterSurface.updateCaustics === 'function') {
+      this.waterSurface.updateCaustics(renderer);
+    }
   }
 
   /**
@@ -1143,37 +1156,17 @@ export class IsometricBoard {
    * @param {number} [strength=1.0]
    */
   triggerWaterRipple(worldX, worldZ, strength = 1.0) {
-    if (this.waterRipples) {
-      this.waterRipples.displace(worldX, worldZ, -1.2 * strength);
-      this.waterRipples.settle(2.0, 1.5);
-      if (this.waterRippleTexture) this.waterRippleTexture.needsUpdate = true;
+    if (this.waterSurface) {
+      this.waterSurface.triggerRipple(worldX, worldZ, strength);
     }
-
-    const ringGeo = new THREE.RingGeometry(0.8, 2.2, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x22d3ee,
-      transparent: true,
-      opacity: 0.85 * Math.min(strength, 1.0),
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-    ringMesh.rotation.x = -Math.PI / 2;
-    ringMesh.position.set(worldX, 0.15, worldZ);
-    this.boardGroup.add(ringMesh);
-
-    const now = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
-    this.activeWaterRipples.push({
-      mesh: ringMesh,
-      startTime: now
-    });
   }
 
   /**
-   * Update highlight animations and FFT water swell & ripples.
+   * Update highlight animations, FFT water swell, ripples, and caustics.
    * @param {number} now
+   * @param {THREE.WebGLRenderer} [renderer]
    */
-  update(now) {
+  update(now, renderer = null) {
     const nowSec = now || (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
 
     if (this.activeUnitGroup.visible) {
@@ -1181,62 +1174,10 @@ export class IsometricBoard {
       this.activeUnitMaterial.opacity = pulse;
     }
 
-    // Step FFT water swell and ripples solver
-    if (this.waterSwell) {
-      this.waterSwell.update(nowSec);
-      if (this.waterSwellTexture) this.waterSwellTexture.needsUpdate = true;
-    }
-    if (this.waterRipples) {
-      this.waterRipples.settle(1.0, 2.0);
-      this.waterRipples.step();
-      if (this.waterRippleTexture) this.waterRippleTexture.needsUpdate = true;
-    }
-
-    // Update water material shader uniforms
-    if (this.waterSurfaceMaterial && this.waterSurfaceMaterial.uniforms?.uTime) {
-      this.waterSurfaceMaterial.uniforms.uTime.value = nowSec;
-      this.waterSurfaceMaterial.opacity = 0.82 + 0.08 * Math.sin(nowSec * 2.5);
-    }
-
-    // Deform water surface mesh with live wave heights
-    if (this.waterSurfaceMesh && this.waterBasePositions && this.waterSwell) {
-      const pos = this.waterSurfaceMesh.geometry.attributes.position;
-      const array = pos.array;
-      const base = this.waterBasePositions;
-      const swell = this.waterSwell;
-      const ripples = this.waterRipples;
-
-      for (let i = 0; i < array.length; i += 3) {
-        const wx = base[i];
-        const wz = base[i + 2];
-        const u = (wx + 120) / 240;
-        const v = (wz + 120) / 240;
-        let h = sampleWaterField(swell.heightDisplacement, swell.size, u, v, 0);
-        if (ripples) {
-          h += sampleWaterField(ripples.field, ripples.size, u, v, 0);
-        }
-        array[i + 1] = base[i + 1] + h * 0.55;
-      }
-      pos.needsUpdate = true;
-      this.waterSurfaceMesh.geometry.computeVertexNormals();
-    }
-
-    // Animate expanding 3D water ripple rings
-    if (this.activeWaterRipples && this.activeWaterRipples.length > 0) {
-      const RIPPLE_DURATION = 0.75;
-      for (let i = this.activeWaterRipples.length - 1; i >= 0; i--) {
-        const r = this.activeWaterRipples[i];
-        const elapsed = nowSec - r.startTime;
-        const progress = Math.min(1.0, elapsed / RIPPLE_DURATION);
-        const scale = 1.0 + progress * 3.5;
-        r.mesh.scale.set(scale, scale, 1);
-        r.mesh.material.opacity = Math.max(0, (1 - progress) * 0.85);
-        if (progress >= 1.0) {
-          this.boardGroup.remove(r.mesh);
-          r.mesh.geometry.dispose();
-          r.mesh.material.dispose();
-          this.activeWaterRipples.splice(i, 1);
-        }
+    if (this.waterSurface) {
+      this.waterSurface.update(nowSec);
+      if (renderer) {
+        this.waterSurface.updateCaustics(renderer);
       }
     }
   }
@@ -1318,18 +1259,17 @@ export class IsometricBoard {
       this.waterRippleTexture = null;
     }
 
-    if (this.waterSurfaceMesh) {
-      this.boardGroup.remove(this.waterSurfaceMesh);
-      this.waterSurfaceMesh.geometry?.dispose();
-      this.waterSurfaceMesh = null;
+    if (this.waterSurface) {
+      this.waterSurface.dispose();
+      this.waterSurface = null;
     }
-    if (this.waterSurfaceMaterial) {
-      this.waterSurfaceMaterial.dispose();
-      this.waterSurfaceMaterial = null;
-    }
+    this.waterSurfaceMesh = null;
+    this.waterSurfaceMaterial = null;
     this.waterBasePositions = null;
     this.waterSwell = null;
     this.waterRipples = null;
+    this.riverPosts = [];
+    this.riverPostMeshes = [];
 
     if (this.runeSwitches) {
       for (const sw of this.runeSwitches.values()) {
