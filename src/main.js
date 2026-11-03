@@ -38,14 +38,7 @@ import {
   calculateFacing
 } from './game/combat-rules.js';
 
-// Safe dynamic loader for stage/free-roam-controller.js
-let StageFreeRoamController = null;
-try {
-  const frMod = await import(/* @vite-ignore */ './stage/free-roam-controller.js').catch(() => null);
-  StageFreeRoamController = frMod?.FreeRoamController || null;
-} catch (e) {
-  StageFreeRoamController = null;
-}
+import { FreeRoamController as StageFreeRoamController } from './stage/free-roam-controller.js';
 
 // Fallback FreeRoamController
 class FallbackFreeRoamController {
@@ -1155,8 +1148,11 @@ class TacticsGame {
         }
         if (outcome.recruited) {
           defender.team = 'azure';
+          defender.clan = 'azure';
+          defender.clanName = 'Azure Clan';
           defender.color = 0x38bdf8;
           defender.alive = true;
+          this.stageUnitManager.setUnitWeapon?.(defender.id, defender.heldModelName, 'azure', defender.finishTier);
           this.tacticalHud.showCelebrationBanner(
             `🤝 RECRUITED!`,
             `${defender.name} defected to your Clan!`
@@ -1177,17 +1173,39 @@ class TacticsGame {
           await defenderActor.playSamuraiCounter(attackerActor);
         }
         const counterDmg = outcome.samuraiCounter.damage || 45;
-        attacker.hp = Math.max(0, (attacker.hp || 100) - counterDmg);
         const atkAnchor = this.stageUnitManager.getUnitScreenAnchor(attacker.id, this.isometricBoard);
+        if (attackerActor?.root?.position) {
+          this.stageUnitManager.spawn3DDamageCounter?.(attackerActor.root.position, counterDmg, false);
+        }
         this.tacticalHud.spawnFloatingText(atkAnchor, `⚔️ SHIRAHADORI -${counterDmg}`, 'crit', this.projectWorldToScreen);
         this.tacticalHud.addLog(`⚔️ SHIRAHADORI! ${defender.name} caught the blade and countered for ${counterDmg} DMG!`, 'combat');
+        this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
+
+        if (attacker.hp <= 0 && attacker.alive !== false) {
+          attacker.alive = false;
+          attacker.isDead = true;
+          this.tacticalHud.addLog(`☠️ DEFEATED! ${attacker.name} was slain by Shirahadori counter!`, 'combat');
+          await this.stageUnitManager.playDefeat(attacker.id);
+          const atkX = attacker.gridX !== undefined ? attacker.gridX : attacker.x;
+          const atkZ = attacker.gridZ !== undefined ? attacker.gridZ : attacker.z;
+          this.stageUnitManager.spawnLootBag?.(atkX, atkZ, this.isometricBoard, { orbs: 1 });
+          this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
+
+          if (this._checkBattleOutcome()) return;
+          this.turnManager.endTurn(attacker, true, true);
+          this.advanceTurn();
+          return;
+        }
       }
 
       // 5. Lifesteal heal / CT strip telemetry
       if (outcome.lifestealHeal > 0) {
-        attacker.hp = Math.min(attacker.maxHp || 100, (attacker.hp || 0) + outcome.lifestealHeal);
         const atkAnchor = this.stageUnitManager.getUnitScreenAnchor(attacker.id, this.isometricBoard);
+        if (attackerActor?.root?.position) {
+          this.stageUnitManager.spawn3DDamageCounter?.(attackerActor.root.position, outcome.lifestealHeal, true);
+        }
         this.tacticalHud.spawnFloatingText(atkAnchor, `+${outcome.lifestealHeal} LIFESTEAL`, 'heal', this.projectWorldToScreen);
+        this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
       }
       if (outcome.ctStripped > 0) {
         defender.ct = Math.max(0, (defender.ct || 0) - outcome.ctStripped);
@@ -1641,7 +1659,19 @@ class TacticsGame {
           }
           if (outcome.recruited) {
             target.team = 'crimson';
+            target.clan = 'crimson';
+            target.clanName = 'Crimson Order';
+            target.color = 0xf43f5e;
+            this.clanRoster = this.clanRoster.filter(u => u.id !== target.id);
+            this._syncForgeRoster();
+            this.stageUnitManager.setUnitWeapon?.(target.id, target.heldModelName, 'crimson', target.finishTier);
             this.tacticalHud.showCelebrationBanner(`🗣️ DEFECTED!`, `${target.name} defected to the Crimson Order!`);
+            this.tacticalHud.addLog(`🗣️ DEFECTED! ${target.name} defected to the Crimson Order!`, 'combat');
+            this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
+            if (this._checkBattleOutcome()) {
+              this._isProcessingTurn = false;
+              return;
+            }
           }
         }
 
@@ -1651,10 +1681,43 @@ class TacticsGame {
             await targetActor.playSamuraiCounter(aiActor);
           }
           const counterDmg = outcome.samuraiCounter.damage || 45;
-          aiUnit.hp = Math.max(0, (aiUnit.hp || 100) - counterDmg);
           const aiAnchor = this.stageUnitManager.getUnitScreenAnchor(aiUnit.id, this.isometricBoard);
+          if (aiActor?.root?.position) {
+            this.stageUnitManager.spawn3DDamageCounter?.(aiActor.root.position, counterDmg, false);
+          }
           this.tacticalHud.spawnFloatingText(aiAnchor, `⚔️ SHIRAHADORI -${counterDmg}`, 'crit', this.projectWorldToScreen);
           this.tacticalHud.addLog(`⚔️ SHIRAHADORI! ${target.name} countered ${aiUnit.name} for ${counterDmg} DMG!`, 'combat');
+          this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
+
+          if (aiUnit.hp <= 0 && aiUnit.alive !== false) {
+            aiUnit.alive = false;
+            aiUnit.isDead = true;
+            this.tacticalHud.addLog(`☠️ DEFEATED! ${aiUnit.name} was slain by Shirahadori counter!`, 'combat');
+            await this.stageUnitManager.playDefeat(aiUnit.id);
+            const aX = aiUnit.gridX !== undefined ? aiUnit.gridX : aiUnit.x;
+            const aZ = aiUnit.gridZ !== undefined ? aiUnit.gridZ : aiUnit.z;
+            this.stageUnitManager.spawnLootBag?.(aX, aZ, this.isometricBoard, { orbs: 1 });
+            this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
+
+            if (this._checkBattleOutcome()) {
+              this._isProcessingTurn = false;
+              return;
+            }
+            this.turnManager.endTurn(aiUnit, true, true);
+            this._isProcessingTurn = false;
+            this.advanceTurn();
+            return;
+          }
+        }
+
+        // 5. Obsidian Lifesteal for AI
+        if (outcome.lifestealHeal > 0) {
+          const aiAnchor = this.stageUnitManager.getUnitScreenAnchor(aiUnit.id, this.isometricBoard);
+          if (aiActor?.root?.position) {
+            this.stageUnitManager.spawn3DDamageCounter?.(aiActor.root.position, outcome.lifestealHeal, true);
+          }
+          this.tacticalHud.spawnFloatingText(aiAnchor, `+${outcome.lifestealHeal} LIFESTEAL`, 'heal', this.projectWorldToScreen);
+          this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
         }
 
         const headAnchor = this.stageUnitManager.getUnitScreenAnchor(
@@ -2200,7 +2263,8 @@ class TacticsGame {
             }
           }
         },
-        onApplyCustomSheet: (dataUrl) => {
+        onApplyCustomSheet: async (dataUrl) => {
+          await this.stageUnitManager?.applyCustomSpriteSheet?.(dataUrl);
           this.tacticalHud.addLog('Custom a1.png applied to 3D battlefield units.', 'system');
         }
       });
@@ -2231,11 +2295,18 @@ class TacticsGame {
           this.freeRoamController = new FallbackFreeRoamController();
         }
       }
+      if (!this.activeUnit) {
+        this.activeUnit = this.units.find((u) => (u.team === 'blue' || u.team === 'azure') && u.alive !== false) || this.units[0];
+      }
       const actor = this.stageUnitManager?._getActor?.(this.activeUnit);
       this.freeRoamController.enable(actor, this.isometricBoard, this.scene);
       this.tacticalHud.addLog('🕹️ Real-Time Free-Roam Mode ENABLED.', 'system');
     } else {
       this.freeRoamController?.disable();
+      if (this.activeUnit) {
+        this.isometricBoard?.setActiveUnitTile?.(this.activeUnit.gridX, this.activeUnit.gridZ);
+      }
+      this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
       this.tacticalHud.addLog('🕹️ Free-Roam Mode DISABLED. Restored tactical grid.', 'system');
     }
   }
@@ -2288,7 +2359,7 @@ class TacticsGame {
       u.gridZ = pos.z;
       u.x = pos.x;
       u.z = pos.z;
-      u.elevation = this.isometricBoard?.getElevation(pos.x, pos.z) ?? 0;
+      u.elevation = this.isometricBoard?.getElevation?.(pos.x, pos.z) ?? this.isometricBoard?.getTile?.(pos.x, pos.z)?.elevation ?? 0;
       u.team = 'azure';
       u.alive = true;
       u.isDead = false;
@@ -2298,10 +2369,11 @@ class TacticsGame {
       u.ct = 0;
     });
 
-    this.units = [...currentClan, ...newEnemies];
-    this.stageUnitManager.initUnits(this.units, this.isometricBoard);
+    const enemyList = Array.isArray(newEnemies) ? newEnemies : (newEnemies.enemies || []);
+    this.units = [...currentClan, ...enemyList];
+    this.stageUnitManager.spawnUnits(this.units, this.isometricBoard);
     this.turnManager.initQueue(this.units);
-    this.tacticalHud.updateTurnRibbon(this.turnManager.getTurnOrder(8));
+    this.tacticalHud.updateTurnQueue(this.turnManager.getTurnQueuePreview(this.units, 8), this.activeUnit);
     this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
     this.advanceTurn();
   }
@@ -2313,8 +2385,28 @@ class TacticsGame {
     if (actor) {
       actor.unit = unit;
     }
+    const weaponName = unit.heldModelName || unit.weapon?.heldModelName || unit.weaponType;
+    this.stageUnitManager.setUnitWeapon?.(unit.id, weaponName, unit.team, unit.finishTier);
+    this.turnManager.updateUnit?.(unit);
+    this.tacticalHud.updateTurnQueue(this.turnManager.getTurnQueuePreview(this.units, 8), this.activeUnit);
     this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
     this.tacticalHud.addLog(`🎲 Unit ${unit.name} re-rolled with seed ${customSeed}.`, 'system');
+  }
+
+  checkBattleEnd() {
+    return this._checkBattleOutcome();
+  }
+
+  get playerUnits() {
+    return this.units.filter((u) => (u.team === 'blue' || u.team === 'azure') && u.alive !== false && !u.isDead);
+  }
+
+  get enemyUnits() {
+    return this.units.filter((u) => (u.team === 'red' || u.team === 'crimson') && u.alive !== false && !u.isDead);
+  }
+
+  get allUnits() {
+    return this.units;
   }
 
   async rollNewBattlefield() {

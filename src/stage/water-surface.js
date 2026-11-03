@@ -557,11 +557,19 @@ export class WaterSurface {
   updateCaustics(renderer) {
     if (!renderer) return;
     const oldTarget = renderer.getRenderTarget();
+    const oldClearColor = new THREE.Color();
+    renderer.getClearColor(oldClearColor);
+    const oldClearAlpha = renderer.getClearAlpha();
+    const oldAutoClear = renderer.autoClear;
+
     renderer.setRenderTarget(this.causticTarget);
     renderer.setClearColor(0x000000, 1);
     renderer.clear();
     renderer.render(this.causticScene, this.causticCamera);
+
     renderer.setRenderTarget(oldTarget);
+    renderer.setClearColor(oldClearColor, oldClearAlpha);
+    renderer.autoClear = oldAutoClear;
   }
 
   /**

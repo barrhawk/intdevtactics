@@ -541,6 +541,15 @@ export class TacticalHUD {
   }
 
   /**
+   * Alias for updateTurnQueue to update turn ribbon preview.
+   * @param {Array<Object>} [queuePreview=[]]
+   * @param {Object} [activeUnit]
+   */
+  updateTurnRibbon(queuePreview = [], activeUnit = null) {
+    return this.updateTurnQueue(queuePreview, activeUnit);
+  }
+
+  /**
    * Updates horizontal CT Turn Order Ribbon (next 8 upcoming units in chronological order)
    * @param {Array<Object>} queuePreview - array of unit turns
    * @param {Object} [activeUnit] - currently active unit

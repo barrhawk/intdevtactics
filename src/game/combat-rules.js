@@ -1443,7 +1443,9 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     if (counterRoll <= 35) {
       const defAtk = defender.stats?.physicalDamage || defender.stats?.atk || 20;
       const counterDamage = Math.max(8, Math.round(defAtk * 0.45));
-      attacker.hp = Math.max(1, (attacker.hp ?? 100) - counterDamage);
+      attacker.hp = Math.max(0, (attacker.hp ?? 100) - counterDamage);
+      attacker.alive = attacker.hp > 0;
+      attacker.isDead = !attacker.alive;
       samuraiCounter = {
         triggered: true,
         damage: counterDamage

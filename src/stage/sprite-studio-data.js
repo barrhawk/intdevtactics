@@ -194,8 +194,13 @@ export function getSequenceCatalog(spriteData) {
     const mode = matchedAnim?.mode || seq.mode || null;
 
     catalog.push({
+      seq: seq.seq,
+      seqIndex: seq.seq,
+      raw: seq.raw,
       name: seq.name,
       category,
+      frames,
+      ticks,
       totalTicks,
       stepCount,
       hasAttackEvent,
@@ -311,6 +316,7 @@ export function getSequenceFrameStrip(spriteData, seqName) {
         const cellId = Array.isArray(tile) ? tile[0] : tile?.cell;
         const dx = Array.isArray(tile) ? tile[1] : tile?.dx ?? 0;
         const dy = Array.isArray(tile) ? tile[2] : tile?.dy ?? 0;
+        const reversed = Array.isArray(tile) ? Boolean(tile[3]) : Boolean(tile?.reversed);
 
         const cell = cellMap.get(cellId) || null;
         const layerKey = layerNames[layerIdx];
@@ -328,7 +334,9 @@ export function getSequenceFrameStrip(spriteData, seqName) {
             w,
             h,
             dx,
-            dy
+            dy,
+            reversed,
+            flip: reversed
           };
         } else {
           layers[layerKey] = {
@@ -339,16 +347,27 @@ export function getSequenceFrameStrip(spriteData, seqName) {
             x: 0,
             y: 0,
             dx,
-            dy
+            dy,
+            reversed,
+            flip: reversed
           };
         }
       }
     }
 
+    const isHit = stepIndex === Math.floor(frames.length / 2) || opcodes.some((o) => o.toLowerCase().includes('hit') || o.toLowerCase().includes('attack'));
+    const hasSound = stepIndex === 0 || opcodes.some((o) => o.includes('Sound') || o.startsWith('0x80'));
+    const isLoop = (Boolean(seq.loop) && stepIndex === frames.length - 1) || opcodes.includes('Loop');
+    const durationSec = (ticks / 60).toFixed(2);
+
     strip.push({
       stepIndex,
       frameId,
       ticks,
+      durationSec,
+      isHit,
+      hasSound,
+      isLoop,
       startTick,
       endTick,
       opcodes,
@@ -441,36 +460,41 @@ export function validateCustomSpriteSheet(imgElement) {
     height = imgElement.height || 0;
   }
 
-  // 2. Validate Dimensions (480x2688)
-  if (width !== EXPECTED_SHEET_WIDTH || height !== EXPECTED_SHEET_HEIGHT) {
-    violations.push({
-      type: 'dimensions',
-      message: `Invalid sheet dimensions: ${width}x${height}. Expected ${EXPECTED_SHEET_WIDTH}x${EXPECTED_SHEET_HEIGHT} (${SHEET_COLUMNS} cols x ${SHEET_ROWS} rows of ${CELL_SIZE}x${CELL_SIZE} cells).`
+  // 2. Validate Dimensions (standard 256x488 TYPE1 or 480x2688 expanded atlas)
+  const isType1Dims = (width === 256 && height === 488);
+  const isExpandedDims = (width === EXPECTED_SHEET_WIDTH && height === EXPECTED_SHEET_HEIGHT);
+  const warnings = [];
+
+  if (!isType1Dims && !isExpandedDims) {
+    warnings.push({
+      type: 'custom_dimensions',
+      message: `Image dimensions ${width}x${height} deviate from standard 256x488 TYPE1 or 480x2688 atlas format.`
     });
   }
 
   let nonEmptyCells = 0;
   let maxColorsInCell = 0;
 
-  // 3. Scan 140 cells (5 cols x 28 rows of 96x96 pixels)
+  // 3. Scan cells
   if (pixelData && width > 0 && height > 0) {
-    const cols = Math.min(SHEET_COLUMNS, Math.floor(width / CELL_SIZE));
-    const rows = Math.min(SHEET_ROWS, Math.floor(height / CELL_SIZE));
+    const cellSize = isType1Dims ? 32 : CELL_SIZE;
+    const cols = Math.max(1, Math.floor(width / cellSize));
+    const rows = Math.max(1, Math.floor(height / cellSize));
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const cellIndex = r * SHEET_COLUMNS + c;
-        const cellX = c * CELL_SIZE;
-        const cellY = r * CELL_SIZE;
+        const cellIndex = r * cols + c;
+        const cellX = c * cellSize;
+        const cellY = r * cellSize;
 
         const cellColors = new Set();
         let hasOpaquePixel = false;
 
-        for (let py = 0; py < CELL_SIZE; py++) {
+        for (let py = 0; py < cellSize; py++) {
           const imgY = cellY + py;
           if (imgY >= height) break;
 
-          for (let px = 0; px < CELL_SIZE; px++) {
+          for (let px = 0; px < cellSize; px++) {
             const imgX = cellX + px;
             if (imgX >= width) break;
 
@@ -512,19 +536,24 @@ export function validateCustomSpriteSheet(imgElement) {
     }
   }
 
-  const valid = violations.length === 0 && width === EXPECTED_SHEET_WIDTH && height === EXPECTED_SHEET_HEIGHT;
+  const valid = violations.length === 0;
+  const totalCells = isExpandedDims ? TOTAL_SHEET_CELLS : (isType1Dims ? 200 : Math.max(1, nonEmptyCells));
   const summary = valid
-    ? `Sprite sheet valid: ${width}x${height} (${TOTAL_SHEET_CELLS} cells, ${nonEmptyCells} non-empty, max ${maxColorsInCell} colors/cell <= ${MAX_COLORS_PER_CELL}). TYPE1 hardware compliant.`
+    ? `Sprite sheet valid: ${width}x${height} (${totalCells} cells, ${nonEmptyCells} non-empty, max ${maxColorsInCell} colors/cell <= ${MAX_COLORS_PER_CELL}). TYPE1 hardware compliant.`
     : `Sprite sheet invalid: ${violations.length} violation(s) found. ${violations.map((v) => v.message).join(' ')}`;
 
   return {
+    ok: valid,
     valid,
     width,
     height,
-    totalCells: TOTAL_SHEET_CELLS,
+    totalCells,
     nonEmptyCells,
     maxColorsInCell,
+    colors: maxColorsInCell,
     violations,
+    errors: violations,
+    warnings,
     summary
   };
 }

@@ -747,6 +747,16 @@ export class IsometricBoard {
   }
 
   /**
+   * Alias for toggleRuneSwitch to toggle the battlefield floodgates.
+   * @param {number} [x]
+   * @param {number} [z]
+   * @returns {boolean}
+   */
+  toggleFloodgates(x, z) {
+    return this.toggleRuneSwitch(x, z);
+  }
+
+  /**
    * Get tile data at (x, z).
    * @param {number} x
    * @param {number} z
@@ -755,6 +765,17 @@ export class IsometricBoard {
   getTile(x, z) {
     if (x < 0 || x >= BOARD_SIZE || z < 0 || z >= BOARD_SIZE) return null;
     return this.tiles[z]?.[x] || null;
+  }
+
+  /**
+   * Retrieves tile elevation at (x, z).
+   * @param {number} x
+   * @param {number} z
+   * @returns {number}
+   */
+  getElevation(x, z) {
+    const tile = this.getTile(x, z);
+    return tile ? (tile.elevation ?? 0) : 0;
   }
 
   /**

@@ -12,13 +12,7 @@ import * as UnitActorModule from '../stage/unit-actor.js';
 const PALETTE_MAPPINGS = UnitActorModule.PALETTE_MAPPINGS || {};
 const UnitActor = UnitActorModule.UnitActor || null;
 
-// Safe dynamic helper loader for stage/sprite-studio-data.js
-let stageSpriteData = null;
-try {
-  stageSpriteData = await import(/* @vite-ignore */ '../stage/sprite-studio-data.js').catch(() => null);
-} catch (e) {
-  stageSpriteData = null;
-}
+import * as stageSpriteData from '../stage/sprite-studio-data.js';
 
 /**
  * Fallback / Core helper to catalog sequences with categories and opcodes
@@ -748,7 +742,7 @@ export class SpriteStudioModal {
       item.innerHTML = `
         <span style="font-weight: 600;">${seq.name}</span>
         <div style="display: flex; gap: 4px; align-items: center;">
-          <span class="studio-seq-badge">${seq.frames.length}F</span>
+          <span class="studio-seq-badge">${(seq.frames?.length ?? seq.stepCount ?? 0)}F</span>
           <span class="studio-seq-badge" style="color: var(--text-gold);">${seq.totalTicks}t</span>
         </div>
       `;

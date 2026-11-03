@@ -331,6 +331,8 @@ export const PALETTE_MAPPINGS = {
 };
 
 export class UnitActor {
+  static _activeActors = new Set();
+
   constructor(options = {}) {
     this.unit = options.unit || {};
     this.team = options.team || 'azure';
@@ -354,6 +356,8 @@ export class UnitActor {
     this.physicsHullMesh = null;
     this._materialProxy = options._materialProxy || null;
     this.manager = options.manager || null;
+
+    UnitActor._activeActors.add(this);
   }
 
   setDirection(newDir) {
@@ -866,7 +870,8 @@ export class UnitActor {
     texture.needsUpdate = true;
 
     // Hot-swap across all active actors
-    for (const actor of allActors) {
+    const targets = (allActors && allActors.length > 0) ? allActors : Array.from(UnitActor._activeActors);
+    for (const actor of targets) {
       if (actor?.manager?.paletteCache) {
         actor.manager.paletteCache.clear();
       }
@@ -1384,6 +1389,15 @@ export class StageUnitManager {
     crownGroup.add(halo);
 
     return crownGroup;
+  }
+
+  /**
+   * Initializes / spawns units on diorama board (alias for spawnUnits).
+   * @param {Array<Object>} units
+   * @param {IsometricBoard} board
+   */
+  initUnits(units, board) {
+    return this.spawnUnits(units, board);
   }
 
   /**
@@ -3264,12 +3278,19 @@ export class StageUnitManager {
         if (actor.statusRingMesh.material) actor.statusRingMesh.material.dispose();
         this.scene.remove(actor.statusRingMesh);
       }
+      if (actor.channelingRingMesh) {
+        if (actor.channelingRingMesh.parent) actor.channelingRingMesh.parent.remove(actor.channelingRingMesh);
+        if (actor.channelingRingMesh.geometry) actor.channelingRingMesh.geometry.dispose();
+        if (actor.channelingRingMesh.material) actor.channelingRingMesh.material.dispose();
+        actor.channelingRingMesh = null;
+      }
       if (actor.physicsHullMesh) {
         if (actor.physicsHullMesh.geometry) actor.physicsHullMesh.geometry.dispose();
         if (actor.physicsHullMesh.material) actor.physicsHullMesh.material.dispose();
         this.scene.remove(actor.physicsHullMesh);
         actor.physicsHullMesh = null;
       }
+      UnitActor._activeActors.delete(actor);
       if (actor.sprite?.dispose) actor.sprite.dispose();
     }
     this.units.clear();

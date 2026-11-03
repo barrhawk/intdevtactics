@@ -175,8 +175,26 @@ export class FreeRoamController {
     }
   }
 
+  _isInputBlocked(e) {
+    if (e?.target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable)) {
+      return true;
+    }
+    if (typeof document !== 'undefined') {
+      const activeEl = document.activeElement;
+      if (activeEl && (['INPUT', 'TEXTAREA', 'SELECT'].includes(activeEl.tagName) || activeEl.isContentEditable)) {
+        return true;
+      }
+      const studioModal = document.querySelector('.studio-modal');
+      const forgeModal = document.querySelector('.forge-modal');
+      if (studioModal && getComputedStyle(studioModal).display !== 'none') return true;
+      if (forgeModal && getComputedStyle(forgeModal).display !== 'none') return true;
+    }
+    return false;
+  }
+
   _handleKeyDown(e) {
     if (!this.enabled || !this.actor) return;
+    if (this._isInputBlocked(e)) return;
     const code = e.code || e.key;
 
     // Prevent scrolling for navigation keys
@@ -213,6 +231,7 @@ export class FreeRoamController {
 
   _handleKeyUp(e) {
     if (!this.enabled) return;
+    if (this._isInputBlocked(e)) return;
     const code = e.code || e.key;
     this.keys.delete(code);
   }
@@ -484,6 +503,12 @@ export class FreeRoamController {
       const p = this.projectiles[i];
       p.age += delta;
 
+      // Prevent memory leak for out-of-bounds or long-lived projectiles
+      if (p.age > 4.0 || p.posY < -100) {
+        this._removeProjectile(i);
+        continue;
+      }
+
       // Integrate gravity & velocity
       p.velY -= 320.0 * delta;
       p.posX += p.velX * delta;
@@ -560,8 +585,17 @@ export class FreeRoamController {
     const cx = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((worldX + HALF_BOARD) / TILE_SIZE)));
     const cz = Math.max(0, Math.min(BOARD_SIZE - 1, Math.floor((worldZ + HALF_BOARD) / TILE_SIZE)));
 
+    const isTileAvailable = (t) => {
+      if (!t || t.passable === false) return false;
+      if (this.board && typeof this.board.getUnitAt === 'function') {
+        const occ = this.board.getUnitAt(t.x, t.z);
+        if (occ && occ !== this.actor?.unit && occ.alive !== false && !occ.isDead) return false;
+      }
+      return true;
+    };
+
     const initial = this.board.getTile(cx, cz);
-    if (initial && initial.passable !== false) return initial;
+    if (isTileAvailable(initial)) return initial;
 
     // Search outwards in Chebyshev rings
     for (let radius = 1; radius < BOARD_SIZE; radius++) {
@@ -569,7 +603,7 @@ export class FreeRoamController {
         for (let dx = -radius; dx <= radius; dx++) {
           if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
           const t = this.board.getTile(cx + dx, cz + dz);
-          if (t && t.passable !== false) return t;
+          if (isTileAvailable(t)) return t;
         }
       }
     }

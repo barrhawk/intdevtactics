@@ -387,10 +387,45 @@ export class TurnManager {
   }
 
   /**
+   * Initializes queue state with active battlefield units.
+   * @param {Array<Object>} [units=[]]
+   * @returns {Array<Object>}
+   */
+  initQueue(units = []) {
+    this.units = units;
+    return this.getTurnQueuePreview(units, 8);
+  }
+
+  /**
+   * Returns turn queue preview for up to count turns (alias for getTurnQueuePreview).
+   * @param {number} [count=8]
+   * @returns {Array<Object>}
+   */
+  getTurnOrder(count = 8) {
+    return this.getTurnQueuePreview(this.units || [], count);
+  }
+
+  /**
+   * Updates a unit reference in the turn manager roster.
+   * @param {Object} unit
+   * @returns {Object}
+   */
+  updateUnit(unit) {
+    if (this.units && unit) {
+      const idx = this.units.findIndex((u) => u.id === unit.id);
+      if (idx >= 0) this.units[idx] = unit;
+    }
+    return unit;
+  }
+
+  /**
    * Clones unit CT/speed state and simulates the next `count` turns.
    * Includes BOTH id and unitId, plus className, job, isBoss, rank, weaponType, paletteId, scale.
    */
   getTurnQueuePreview(units = [], count = 8) {
+    if (units && units.length > 0) {
+      this.units = units;
+    }
     const simUnits = units
       .filter((u) => u && u.alive !== false && !u.isDead && (u.hp === undefined || u.hp > 0) && !u.inPrison)
       .map((u) => {
