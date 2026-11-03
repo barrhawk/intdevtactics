@@ -299,9 +299,29 @@ export function getReachableTiles(unit, board, allUnits = []) {
  * from (originX, originZ) for the given ability/weapon.
  */
 export function getAttackableTiles(unit, originX, originZ, ability, board) {
-  const range = ability?.range || unit?.attackRange || unit?.weapon?.attackRange || { min: 1, max: 1 };
-  const min = range.min ?? 1;
-  const max = range.max ?? 1;
+  let min = 1;
+  let max = 1;
+
+  if (typeof ability?.range === 'number') {
+    min = ability.targetsSelf || ability.isSelf ? 0 : 1;
+    max = ability.range;
+  } else if (ability?.range) {
+    min = ability.range.min !== undefined ? ability.range.min : (ability.targetsSelf || ability.isSelf ? 0 : 1);
+    max = ability.range.max !== undefined ? ability.range.max : min;
+  } else if (typeof unit?.attackRange === 'number') {
+    min = 1;
+    max = unit.attackRange;
+  } else if (unit?.attackRange) {
+    min = unit.attackRange.min !== undefined ? unit.attackRange.min : 1;
+    max = unit.attackRange.max !== undefined ? unit.attackRange.max : min;
+  } else if (typeof unit?.weapon?.attackRange === 'number') {
+    min = 1;
+    max = unit.weapon.attackRange;
+  } else if (unit?.weapon?.attackRange) {
+    min = unit.weapon.attackRange.min !== undefined ? unit.weapon.attackRange.min : 1;
+    max = unit.weapon.attackRange.max !== undefined ? unit.weapon.attackRange.max : min;
+  }
+
   const boardWidth = board?.width || 10;
   const boardHeight = board?.height || 10;
 
@@ -590,6 +610,7 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
   if (ability?.isRevive) {
     defender.alive = true;
     defender.isDead = false;
+    defender.inPrison = false;
     const healPower = ability.healPower || 65;
     const currentHp = (defender.hp && defender.hp > 0) ? defender.hp : 0;
     defender.hp = Math.min(
@@ -816,14 +837,27 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     let isOccupied = false;
     if (typeof board.getUnitAt === 'function') {
       const u = board.getUnitAt(kbX, kbZ);
-      if (u && u !== defender && u.alive !== false && (u.hp === undefined || u.hp > 0)) {
+      if (u && u !== defender && u.alive !== false && !u.isDead && !u.inPrison && (u.hp === undefined || u.hp > 0)) {
         isOccupied = true;
+      }
+    }
+    if (!isOccupied && board.unitActorManager?.units) {
+      for (const actor of board.unitActorManager.units.values()) {
+        const u = actor?.unit;
+        if (u && u !== defender && u.alive !== false && !u.isDead && !u.inPrison && (u.hp === undefined || u.hp > 0)) {
+          const ux = u.gridX !== undefined ? u.gridX : u.x;
+          const uz = u.gridZ !== undefined ? u.gridZ : u.z;
+          if (ux === kbX && uz === kbZ) {
+            isOccupied = true;
+            break;
+          }
+        }
       }
     }
     if (!isOccupied && (Array.isArray(board.units) || Array.isArray(board.allUnits))) {
       const unitsList = board.units || board.allUnits;
       isOccupied = unitsList.some(
-        (u) => u && u !== defender && u.alive !== false && (u.hp === undefined || u.hp > 0) &&
+        (u) => u && u !== defender && u.alive !== false && !u.isDead && !u.inPrison && (u.hp === undefined || u.hp > 0) &&
           ((u.gridX === kbX || u.x === kbX) && (u.gridZ === kbZ || u.z === kbZ))
       );
     }

@@ -776,6 +776,26 @@ export class IsometricBoard {
   }
 
   /**
+   * Returns living unit occupying (x, z), if registered with unitActorManager.
+   * @param {number} x
+   * @param {number} z
+   * @returns {Object|null}
+   */
+  getUnitAt(x, z) {
+    if (this.unitActorManager?.units) {
+      for (const actor of this.unitActorManager.units.values()) {
+        const u = actor?.unit;
+        if (u && !u.isDead && !u.inPrison && u.alive !== false && (u.hp === undefined || u.hp > 0)) {
+          const ux = u.gridX !== undefined ? u.gridX : u.x;
+          const uz = u.gridZ !== undefined ? u.gridZ : u.z;
+          if (ux === x && uz === z) return u;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * Raycast from mouse cursor or NDC coordinates to pick hovered tile.
    * Prioritizes unit bodies/hitboxes and tile top surfaces over vertical column side walls.
    * Supports both (clientX, clientY, camera, canvas) and (ndcX, ndcY, camera, unitActorManager).
@@ -1311,7 +1331,20 @@ export class IsometricBoard {
     this.waterSwell = null;
     this.waterRipples = null;
 
-    this.runeSwitches.clear();
+    if (this.runeSwitches) {
+      for (const sw of this.runeSwitches.values()) {
+        if (sw.mesh) {
+          sw.mesh.traverse((c) => {
+            if (c.geometry) c.geometry.dispose();
+            if (c.material) {
+              if (Array.isArray(c.material)) c.material.forEach((m) => m?.dispose?.());
+              else c.material.dispose();
+            }
+          });
+        }
+      }
+      this.runeSwitches.clear();
+    }
     this.interactiveMeshes = [];
     this.tiles = [];
     this.unitActorManager = null;

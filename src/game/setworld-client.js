@@ -1076,6 +1076,96 @@ export function generateFullEquipment(unitSeed, charClass, weaponSpec, grade = '
 }
 
 /**
+ * Recalculates all equipment bonuses on a unit starting from its base stats,
+ * preventing stat stacking when items are swapped or re-equipped.
+ * @param {Object} unit
+ */
+export function recalculateEquipmentStats(unit) {
+  if (!unit) return;
+  const prevMaxHp = unit.maxHp || 100;
+  const prevMaxMp = unit.maxMp || 40;
+  const wasFullHp = unit.hp === undefined || unit.hp >= prevMaxHp;
+  const wasFullMp = unit.mp === undefined || unit.mp >= prevMaxMp;
+  if (unit._baseMaxHp === undefined) unit._baseMaxHp = unit.maxHp || 100;
+  if (unit._baseMaxMp === undefined) unit._baseMaxMp = unit.maxMp || 40;
+  if (unit._baseMoveRange === undefined) unit._baseMoveRange = unit.moveRange || 3;
+  if (unit._baseSpeed === undefined) unit._baseSpeed = unit.speed || 15;
+  if (!unit._baseStats) unit._baseStats = { ...(unit.stats || {}) };
+
+  // Reset to base stats
+  unit.maxHp = unit._baseMaxHp;
+  unit.maxMp = unit._baseMaxMp;
+  unit.moveRange = unit._baseMoveRange;
+  unit.move = unit._baseMoveRange;
+  unit.speed = unit._baseSpeed;
+  unit.stats = { ...unit._baseStats };
+  unit.armor = unit._baseStats.armor || 0;
+  unit.magicResistance = unit._baseStats.magicResistance || 0;
+  unit.blockChance = unit._baseStats.blockChance || 0;
+  unit.magicDamage = unit._baseStats.magicDamage || 0;
+  unit.dodge = unit._baseStats.dodge || 0;
+
+  if (!unit.equipment) return;
+
+  const slots = ['tool', 'offhand', 'head', 'chest', 'legs', 'finger'];
+  for (const s of slots) {
+    const eqItem = unit.equipment[s];
+    if (!eqItem) continue;
+
+    if (s === 'tool') {
+      const raw = eqItem.rawItem || eqItem;
+      const spec = mapToolToWeaponSpec(raw, unit.className || unit.class || unit.job);
+      unit.weapon = spec;
+      unit.weaponType = spec.weaponType;
+      unit.heldModelName = spec.heldModelName;
+      unit.abilities = spec.abilities;
+      unit.attackRange = spec.attackRange;
+      unit.finishTier = eqItem.finishTier || unit.finishTier;
+      unit.stars = (eqItem.stars !== undefined ? eqItem.stars : eqItem.boostStars) ?? unit.stars;
+      unit.elementalPrefix = eqItem.elementalPrefix || unit.elementalPrefix;
+    } else {
+      const tierMult = { F: 1, E: 2, D: 3, C: 4, B: 6, A: 9, S: 14 }[eqItem.grade || eqItem.tier || 'B'] || 5;
+      const starBonus = ((eqItem.stars !== undefined ? eqItem.stars : eqItem.boostStars) || 0) * 3;
+      const bonus = tierMult + starBonus;
+
+      if (s === 'head') {
+        unit.maxHp += bonus * 3;
+        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 3;
+        unit.magicResistance += bonus;
+        unit.stats.magicResistance = (unit.stats.magicResistance || 0) + bonus;
+      } else if (s === 'chest') {
+        unit.maxHp += bonus * 5;
+        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 5;
+        unit.armor += bonus * 2;
+        unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
+      } else if (s === 'legs') {
+        const moveBonus = Math.min(2, Math.ceil(bonus / 5));
+        unit.moveRange += moveBonus;
+        unit.move = unit.moveRange;
+        unit.speed += bonus;
+        unit.dodge += bonus;
+        unit.stats.moveRange = unit.moveRange;
+        unit.stats.speed = (unit.stats.speed || 15) + bonus;
+        unit.stats.dodge = (unit.stats.dodge || 0) + bonus;
+      } else if (s === 'offhand') {
+        unit.armor += bonus * 2;
+        unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
+        unit.blockChance += bonus;
+        unit.stats.blockChance = (unit.stats.blockChance || 0) + bonus;
+      } else if (s === 'finger') {
+        unit.magicDamage += bonus * 2;
+        unit.stats.magicDamage = (unit.stats.magicDamage || 0) + bonus * 2;
+        unit.speed += bonus;
+        unit.stats.speed = (unit.stats.speed || 15) + bonus;
+      }
+    }
+  }
+
+  unit.hp = wasFullHp ? unit.maxHp : Math.min(unit.hp ?? unit.maxHp, unit.maxHp);
+  unit.mp = wasFullMp ? unit.maxMp : Math.min(unit.mp ?? unit.maxMp, unit.maxMp);
+}
+
+/**
  * Applies a Set.world equipment item to a unit's 6-slot paperdoll
  * (tool, offhand, head, chest, legs, finger) and applies stat bonuses.
  */
@@ -1092,57 +1182,7 @@ export function applyEquipmentToUnit(unit, item, targetSlot = null) {
 
   unit.equipment = unit.equipment || {};
   unit.equipment[slot] = item;
-  unit.stats = unit.stats || {};
-
-  if (slot === 'tool') {
-    const raw = item.rawItem || item;
-    const spec = mapToolToWeaponSpec(raw, unit.className || unit.class || unit.job);
-    unit.weapon = spec;
-    unit.weaponType = spec.weaponType;
-    unit.heldModelName = spec.heldModelName;
-    unit.abilities = spec.abilities;
-    unit.attackRange = spec.attackRange;
-    unit.finishTier = item.finishTier || unit.finishTier;
-    unit.stars = (item.stars !== undefined ? item.stars : item.boostStars) ?? unit.stars;
-    unit.elementalPrefix = item.elementalPrefix || unit.elementalPrefix;
-  } else {
-    const tierMult = { F: 1, E: 2, D: 3, C: 4, B: 6, A: 9, S: 14 }[item.grade || item.tier || 'B'] || 5;
-    const starBonus = ((item.stars !== undefined ? item.stars : item.boostStars) || 0) * 3;
-    const bonus = tierMult + starBonus;
-
-    if (slot === 'head') {
-      unit.maxHp = (unit.maxHp || 100) + bonus * 3;
-      unit.hp = (unit.hp || 100) + bonus * 3;
-      if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 3;
-      unit.magicResistance = (unit.magicResistance || 0) + bonus;
-      unit.stats.magicResistance = (unit.stats.magicResistance || 0) + bonus;
-    } else if (slot === 'chest') {
-      unit.maxHp = (unit.maxHp || 100) + bonus * 5;
-      unit.hp = (unit.hp || 100) + bonus * 5;
-      if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 5;
-      unit.armor = (unit.armor || 0) + bonus * 2;
-      unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
-    } else if (slot === 'legs') {
-      const moveBonus = Math.min(2, Math.ceil(bonus / 5));
-      unit.moveRange = (unit.moveRange || 3) + moveBonus;
-      unit.move = (unit.move !== undefined ? unit.move : (unit.moveRange || 3)) + moveBonus;
-      unit.speed = (unit.speed || 15) + bonus;
-      unit.dodge = (unit.dodge || 0) + bonus;
-      unit.stats.moveRange = unit.moveRange;
-      unit.stats.speed = (unit.stats.speed || 15) + bonus;
-      unit.stats.dodge = (unit.stats.dodge || 0) + bonus;
-    } else if (slot === 'offhand') {
-      unit.armor = (unit.armor || 0) + bonus * 2;
-      unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
-      unit.blockChance = (unit.blockChance || 0) + bonus;
-      unit.stats.blockChance = (unit.stats.blockChance || 0) + bonus;
-    } else if (slot === 'finger') {
-      unit.magicDamage = (unit.magicDamage || 0) + bonus * 2;
-      unit.stats.magicDamage = (unit.stats.magicDamage || 0) + bonus * 2;
-      unit.speed = (unit.speed || 15) + bonus;
-      unit.stats.speed = (unit.stats.speed || 15) + bonus;
-    }
-  }
+  recalculateEquipmentStats(unit);
 
   return { slot, unit };
 }
@@ -1483,6 +1523,11 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       status: initialStatus,
       isFloating,
       stats: charData.attributes || {},
+      _baseMaxHp: maxHp,
+      _baseMaxMp: 40,
+      _baseMoveRange: moveRange,
+      _baseSpeed: speed,
+      _baseStats: { ...(charData.attributes || {}) },
       equipment: fullEquipment,
       yellowCards: 0,
       redCards: 0,

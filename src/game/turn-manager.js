@@ -116,46 +116,56 @@ export class TurnManager {
     }
 
     // Support/healing on allies or actions on same team are never violations
-    const isSupport = !!actionContext.ability?.isSupport;
+    const isSupport = !!(actionContext.ability?.isSupport || actionContext.ability?.isRevive || actionContext.forecast?.isSupport || actionContext.forecast?.isRevive);
     const sameTeam = attacker.team && target.team && attacker.team === target.team;
 
     let violated = false;
     if (!isSupport && !sameTeam) {
-      const ability = actionContext.ability;
-      const wType = (attacker.weapon?.weaponType || attacker.weaponType || attacker.weapon?.heldModelName || '').toLowerCase();
+      const ability = actionContext.ability || actionContext.forecast?.ability;
+      const model = (actionContext.weaponModel || attacker.weapon?.heldModelName || attacker.heldModelName || '').toLowerCase();
+      const wType = (attacker.weapon?.weaponType || attacker.weaponType || attacker.weapon?.heldModelName || model || '').toLowerCase();
 
       switch (law.id) {
         case 'no_backstab': {
           const angle = actionContext.attackAngle || actionContext.forecast?.attackAngle || getRelativeDirection(attacker, target);
-          if (angle === 'Back') violated = true;
+          if (actionContext.isBackstab || actionContext.forecast?.isBackstab || angle === 'Back') {
+            violated = true;
+          }
           break;
         }
         case 'no_ranged': {
-          const ax = attacker.gridX !== undefined ? attacker.gridX : (attacker.x ?? 0);
-          const az = attacker.gridZ !== undefined ? attacker.gridZ : (attacker.z ?? 0);
-          const tx = target.gridX !== undefined ? target.gridX : (target.x ?? 0);
-          const tz = target.gridZ !== undefined ? target.gridZ : (target.z ?? 0);
-          const dist = Math.abs(ax - tx) + Math.abs(az - tz);
+          let dist = actionContext.distance;
+          if (dist === undefined) {
+            const ax = attacker.gridX !== undefined ? attacker.gridX : (attacker.x ?? 0);
+            const az = attacker.gridZ !== undefined ? attacker.gridZ : (attacker.z ?? 0);
+            const tx = target.gridX !== undefined ? target.gridX : (target.x ?? 0);
+            const tz = target.gridZ !== undefined ? target.gridZ : (target.z ?? 0);
+            dist = Math.abs(ax - tx) + Math.abs(az - tz);
+          }
           if (dist > 2) violated = true;
           break;
         }
         case 'no_magic': {
-          const isMagic = !!(ability?.isMagic || wType === 'tome' || wType === 'harp' ||
+          const isMagic = !!(ability?.isMagic || wType === 'tome' || wType === 'harp' || model === 'tome' || model === 'harp' ||
             ability?.anim === 'Casting' || ability?.anim === 'Read Book' ||
             ability?.anim === 'Play Instrument' || ability?.anim === 'Singing');
           if (isMagic) violated = true;
           break;
         }
         case 'no_blades': {
-          const isBlade = wType === 'sword' || wType === 'katana' ||
+          const isBlade = wType === 'sword' || wType === 'katana' || model === 'sword' || model === 'katana' ||
             ability?.animPrefix === 'Swing' || ability?.anim === 'Katana Use';
           if (isBlade) violated = true;
           break;
         }
         case 'no_low_blow': {
-          const atkElev = typeof attacker.elevation === 'number' ? attacker.elevation : 0;
-          const defElev = typeof target.elevation === 'number' ? target.elevation : 0;
-          if (defElev < atkElev) violated = true;
+          if (actionContext.heightDelta !== undefined) {
+            if (actionContext.heightDelta > 0) violated = true;
+          } else {
+            const atkElev = typeof attacker.elevation === 'number' ? attacker.elevation : 0;
+            const defElev = typeof target.elevation === 'number' ? target.elevation : 0;
+            if (defElev < atkElev) violated = true;
+          }
           break;
         }
       }

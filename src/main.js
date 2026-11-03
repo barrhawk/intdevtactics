@@ -262,6 +262,9 @@ class TacticsGame {
     this.tacticalCamera = new TacticalCamera(this.canvas);
     this.isometricBoard = new IsometricBoard(this.scene, this.baseSeed);
     this.stageUnitManager = new StageUnitManager(this.scene);
+    if (this.renderer) {
+      this.stageUnitManager.renderer = this.renderer;
+    }
     this.turnManager = new TurnManager({ ctThreshold: 100 });
 
     // Project 3D world space coordinate into 2D screen pixels for HUD overhead bars & popups
@@ -379,6 +382,9 @@ class TacticsGame {
     // Rebuild terrain for new seed
     this.isometricBoard.dispose();
     this.isometricBoard = new IsometricBoard(this.scene, this.baseSeed);
+    if (this.renderer) {
+      this.isometricBoard.initMarbleBake?.(this.renderer);
+    }
 
     // Generate seeded clan roster (4 Azure Clan vs 4 Crimson Order, or 250x Raid Boss)
     const rosterData = await generateClanRoster(this.baseSeed, this.isometricBoard, { raidBossMode: this.raidBossMode });
@@ -443,6 +449,9 @@ class TacticsGame {
 
     // Spawn 3D sprite actors and ground plinths
     this.stageUnitManager.spawnUnits(this.units, this.isometricBoard);
+    if (this.physicsDebugEnabled) {
+      this.stageUnitManager?.togglePhysicsDebug?.(true);
+    }
 
     // Apply visual 3D weapon meshes for equipped tools
     for (const item of this.playerInventory) {
@@ -476,7 +485,8 @@ class TacticsGame {
       compassLabel: `${this.tacticalCamera.compass} ${this.tacticalCamera.step * 45}°`,
       autoBattle: this.autoBattle,
       turnNumber: this.turnCount,
-      raidBossMode: this.raidBossMode
+      raidBossMode: this.raidBossMode,
+      physicsDebug: !!this.physicsDebugEnabled
     });
 
     // Update active law banner if Judge Law system exists
@@ -668,6 +678,7 @@ class TacticsGame {
 
   togglePhysicsDebug() {
     const active = !!(this.stageUnitManager?.togglePhysicsDebug?.());
+    this.physicsDebugEnabled = active;
     this.tacticalHud.setHeaderState({ physicsDebug: active });
     this.tacticalHud.addLog(
       `🔬 3d.internet.dev Volumetric Physics Hulls & 6-Layer Inspector: ${active ? 'ACTIVE' : 'OFF'}`,
@@ -911,7 +922,15 @@ class TacticsGame {
 
     try {
       // Before/during attack, evaluate FFTA Judge Law compliance
-      this._checkJudgeLaw(attacker, defender, forecast);
+      const lawResult = this._checkJudgeLaw(attacker, defender, forecast);
+      if (lawResult?.redCard) {
+        attacker.hasActed = true;
+        this.currentMode = 'standby';
+        this.turnManager.endTurn(attacker, attacker.hasMoved, true);
+        if (this._checkBattleOutcome()) return;
+        this.advanceTurn();
+        return;
+      }
 
       // Execute deterministic combat outcome
       const outcome = executeCombatAction(attacker, defender, ability, this.isometricBoard);
@@ -968,13 +987,14 @@ class TacticsGame {
       }
 
       // Handle Revive action
-      if (outcome.revived) {
+      if (outcome.revived || ability?.isRevive) {
         defender.alive = true;
         defender.isDead = false;
+        defender.inPrison = false;
         if (defender.hp <= 0) {
           defender.hp = outcome.heal || Math.round((defender.maxHp || 100) * 0.5);
         }
-        this.stageUnitManager?.reviveUnit?.(defender.id);
+        this.stageUnitManager?.reviveUnit?.(defender.id, this.isometricBoard);
         this.tacticalHud.addLog(`✨ ${attacker.name} resurrected ${defender.name} with ${ability.name}!`, 'combat');
         this.tacticalHud.spawnFloatingText(headAnchor, '✨ REVIVED!', 'heal', this.projectWorldToScreen);
       }
@@ -1065,6 +1085,8 @@ class TacticsGame {
     const weaponModel = attacker.heldModelName || attacker.weapon?.heldModelName || attacker.weaponType || 'sword';
 
     const result = this.turnManager.evaluateLawCompliance(attacker, defender, {
+      ability: this.selectedAbility || attacker.weapon?.abilities?.[0],
+      forecast,
       isBackstab,
       distance,
       heightDelta,
@@ -1083,6 +1105,7 @@ class TacticsGame {
         this.playerOrbs = Math.max(0, this.playerOrbs - 50);
         this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
       }
+      attacker.inPrison = true;
       attacker.alive = false;
       attacker.isDead = true;
       attacker.hp = 0;
@@ -1305,7 +1328,26 @@ class TacticsGame {
         if (this.matchId !== currentMatchId) return;
 
         // Check Judge Law compliance for AI combat
-        this._checkJudgeLaw(aiUnit, target, forecast);
+        const lawResult = this._checkJudgeLaw(aiUnit, target, forecast);
+        if (lawResult?.redCard) {
+          aiUnit.hasActed = true;
+          this.turnManager.endTurn(aiUnit, aiUnit.hasMoved, true);
+          turnEnded = true;
+          this.isometricBoard.setActiveUnitTile(null, null);
+          if (this._checkBattleOutcome()) {
+            this._isProcessingTurn = false;
+            return;
+          }
+          await this._sleep(250);
+          if (this.matchId !== currentMatchId) return;
+          this._isProcessingTurn = false;
+          if (this._turnTimer) clearTimeout(this._turnTimer);
+          this._turnTimer = setTimeout(() => {
+            if (this.matchId !== currentMatchId) return;
+            this.advanceTurn();
+          }, 80);
+          return;
+        }
 
         const outcome = executeCombatAction(aiUnit, target, ability, this.isometricBoard);
         outcome.reactionAnimation = outcome.defenderAnim;
@@ -1384,13 +1426,14 @@ class TacticsGame {
         }
 
         // Handle Revive action
-        if (outcome.revived) {
+        if (outcome.revived || ability?.isRevive) {
           target.alive = true;
           target.isDead = false;
+          target.inPrison = false;
           if (target.hp <= 0) {
             target.hp = outcome.heal || Math.round((target.maxHp || 100) * 0.5);
           }
-          this.stageUnitManager?.reviveUnit?.(target.id);
+          this.stageUnitManager?.reviveUnit?.(target.id, this.isometricBoard);
           this.tacticalHud.addLog(`✨ ${aiUnit.name} resurrected ${target.name} with ${ability.name}!`, 'combat');
           this.tacticalHud.spawnFloatingText(headAnchor, '✨ REVIVED!', 'heal', this.projectWorldToScreen);
         }
@@ -1494,11 +1537,11 @@ class TacticsGame {
 
   _checkBattleOutcome() {
     const azureAlive = this.units.filter(
-      (u) => (u.team === 'blue' || u.team === 'azure') && u.alive !== false && (u.hp === undefined || u.hp > 0)
+      (u) => (u.team === 'blue' || u.team === 'azure') && u.alive !== false && !u.isDead && !u.inPrison && (u.hp === undefined || u.hp > 0)
     ).length;
 
     const crimsonAlive = this.units.filter(
-      (u) => (u.team === 'red' || u.team === 'crimson') && u.alive !== false && (u.hp === undefined || u.hp > 0)
+      (u) => (u.team === 'red' || u.team === 'crimson') && u.alive !== false && !u.isDead && !u.inPrison && (u.hp === undefined || u.hp > 0)
     ).length;
 
     if (crimsonAlive === 0) {
@@ -1654,6 +1697,9 @@ class TacticsGame {
       if (unit) {
         if (typeof SetWorldClient['applyEquipmentToUnit'] === 'function') {
           SetWorldClient['applyEquipmentToUnit'](unit, item, targetSlot);
+          if (targetSlot === 'tool' && unit.heldModelName && this.stageUnitManager?.setUnitWeapon) {
+            this.stageUnitManager.setUnitWeapon(unit.id, unit.heldModelName, unit.team, item.finishTier);
+          }
         } else {
           unit.equipment = unit.equipment || {};
           unit.equipment[targetSlot] = item;

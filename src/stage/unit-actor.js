@@ -137,9 +137,22 @@ const COUNTER_VERTEX_SHADER = /* glsl */ `
   uniform float uPxX;
   uniform float uPxY;
 
+  float getHop(int idx) {
+    if (idx == 0) return hops[0];
+    if (idx == 1) return hops[1];
+    if (idx == 2) return hops[2];
+    if (idx == 3) return hops[3];
+    if (idx == 4) return hops[4];
+    if (idx == 5) return hops[5];
+    if (idx == 6) return hops[6];
+    if (idx == 7) return hops[7];
+    if (idx == 8) return hops[8];
+    return hops[9];
+  }
+
   void main() {
     vUv = uv;
-    float hop = hops[int(order)];
+    float hop = getHop(int(order));
     vec4 view = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
     view.xy += vec2(position.x, position.y + uAnchor + hop) * vec2(uPxX, uPxY);
     gl_Position = hop < 0.0 ? vec4(2.0, 2.0, 2.0, 1.0) : projectionMatrix * view;
@@ -147,6 +160,7 @@ const COUNTER_VERTEX_SHADER = /* glsl */ `
 `;
 
 const COUNTER_FRAGMENT_SHADER = /* glsl */ `
+  precision mediump float;
   uniform sampler2D digits;
   varying vec2 vUv;
 
@@ -816,6 +830,7 @@ export class StageUnitManager {
    */
   spawnUnits(units, board) {
     this.dispose();
+    this.board = board || null;
 
     if (!units || !units.length) return;
 
@@ -996,6 +1011,10 @@ export class StageUnitManager {
       if (sprite.group) sprite.group.visible = true;
       this.setActorOpacity(actor, 1.0);
       this.units.set(id, actor);
+    }
+
+    if (this.physicsDebugEnabled) {
+      this.togglePhysicsDebug(true);
     }
   }
 
@@ -1418,7 +1437,12 @@ export class StageUnitManager {
           actor.unit.elevation = targetElev;
           actor.groundY = targetWorld.y;
           actor.inWater = isWater;
-          actor.sprite.player.water = isWater;
+          if (actor.sprite?.player) {
+            actor.sprite.player.water = isWater;
+          }
+          if (isWater) {
+            board?.triggerWaterRipple?.(targetWorld.x, targetWorld.z, 1.2);
+          }
           resolve();
         }
       };
@@ -1901,7 +1925,7 @@ export class StageUnitManager {
     const defHp = defenderActor.unit.hp ?? defenderActor.unit.currentHp ?? 100;
 
     if (isHeal || defHp > 0) {
-      this.reviveUnit(defenderActor);
+      this.reviveUnit(defenderActor, board);
     }
 
     const isDead =
@@ -1927,13 +1951,15 @@ export class StageUnitManager {
   /**
    * Fully restores a defeated or wounded unit to living combatant state.
    * @param {string|number|Object} unitOrId
+   * @param {IsometricBoard} [board]
    */
-  reviveUnit(unitOrId) {
+  reviveUnit(unitOrId, board = null) {
     const actor = this._getActor(unitOrId);
     if (!actor) return;
 
     actor.unit.isDead = false;
     actor.unit.alive = true;
+    actor.unit.inPrison = false;
 
     if (actor.sprite?.group) {
       actor.sprite.group.visible = true;
@@ -1951,6 +1977,32 @@ export class StageUnitManager {
     }
     if (actor.bossCrown) {
       actor.bossCrown.visible = true;
+    }
+    if (this.physicsDebugEnabled && actor.physicsHullMesh) {
+      actor.physicsHullMesh.visible = true;
+    }
+
+    const b = board || this.board;
+    if (b && typeof b.tileToWorld === 'function') {
+      const ux = actor.unit.gridX !== undefined ? actor.unit.gridX : actor.unit.x;
+      const uz = actor.unit.gridZ !== undefined ? actor.unit.gridZ : actor.unit.z;
+      const tile = b.getTile?.(ux, uz);
+      const elev = actor.unit.elevation !== undefined ? actor.unit.elevation : (tile?.elevation ?? 0);
+      const worldPos = b.tileToWorld(ux, uz, elev);
+      const isWater = (tile?.terrain === 'water' || tile?.isWater) && actor.unit.status !== 'floating';
+      actor.groundY = worldPos.y;
+      actor.inWater = isWater;
+      if (actor.sprite?.player) actor.sprite.player.water = isWater;
+      const waterOffset = isWater ? -3.5 : 0;
+      if (actor.sprite?.group) {
+        actor.sprite.group.position.set(worldPos.x, worldPos.y + (actor.sprite.standHeight || 18) + waterOffset, worldPos.z);
+      }
+      if (actor.ring) {
+        actor.ring.position.set(worldPos.x, worldPos.y + 0.12, worldPos.z);
+      }
+      if (actor.hitboxMesh) {
+        actor.hitboxMesh.position.set(worldPos.x, worldPos.y + 13, worldPos.z);
+      }
     }
 
     const getNow = () => performance.now() / 1000;
@@ -1977,7 +2029,7 @@ export class StageUnitManager {
     if (actor.carriedMesh) {
       actor.sprite.release();
       if (actor.carriedMesh.material) {
-        attackerActor.carriedMesh.material.onBeforeRender = null;
+        actor.carriedMesh.material.onBeforeRender = null;
         actor.carriedMesh.material.dispose();
       }
       this.scene.remove(actor.carriedMesh);
