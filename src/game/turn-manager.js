@@ -57,6 +57,7 @@ export class TurnManager {
     this.turnCount = 0;
     this.seed = options.seed !== undefined ? (options.seed >>> 0) : 0x1337;
     this.activeLaw = this._getLawForTurn(this.turnCount);
+    this.lawCompliantStreak = 0;
   }
 
   /**
@@ -71,6 +72,7 @@ export class TurnManager {
     this.tickCount = 0;
     this.turnCount = 0;
     this.activeLaw = this._getLawForTurn(0);
+    this.lawCompliantStreak = 0;
     return this;
   }
 
@@ -116,74 +118,96 @@ export class TurnManager {
     // Support/healing on allies or actions on same team are never violations
     const isSupport = !!actionContext.ability?.isSupport;
     const sameTeam = attacker.team && target.team && attacker.team === target.team;
-    if (isSupport || sameTeam) {
-      return { violated: false, law, cardType: null, penaltyText: '' };
-    }
 
     let violated = false;
-    const ability = actionContext.ability;
-    const wType = (attacker.weapon?.weaponType || attacker.weaponType || attacker.weapon?.heldModelName || '').toLowerCase();
+    if (!isSupport && !sameTeam) {
+      const ability = actionContext.ability;
+      const wType = (attacker.weapon?.weaponType || attacker.weaponType || attacker.weapon?.heldModelName || '').toLowerCase();
 
-    switch (law.id) {
-      case 'no_backstab': {
-        const angle = actionContext.attackAngle || actionContext.forecast?.attackAngle || getRelativeDirection(attacker, target);
-        if (angle === 'Back') violated = true;
-        break;
-      }
-      case 'no_ranged': {
-        const ax = attacker.gridX !== undefined ? attacker.gridX : (attacker.x ?? 0);
-        const az = attacker.gridZ !== undefined ? attacker.gridZ : (attacker.z ?? 0);
-        const tx = target.gridX !== undefined ? target.gridX : (target.x ?? 0);
-        const tz = target.gridZ !== undefined ? target.gridZ : (target.z ?? 0);
-        const dist = Math.abs(ax - tx) + Math.abs(az - tz);
-        if (dist > 2) violated = true;
-        break;
-      }
-      case 'no_magic': {
-        const isMagic = !!(ability?.isMagic || wType === 'tome' || wType === 'harp' ||
-          ability?.anim === 'Casting' || ability?.anim === 'Read Book' ||
-          ability?.anim === 'Play Instrument' || ability?.anim === 'Singing');
-        if (isMagic) violated = true;
-        break;
-      }
-      case 'no_blades': {
-        const isBlade = wType === 'sword' || wType === 'katana' ||
-          ability?.animPrefix === 'Swing' || ability?.anim === 'Katana Use';
-        if (isBlade) violated = true;
-        break;
-      }
-      case 'no_low_blow': {
-        const atkElev = typeof attacker.elevation === 'number' ? attacker.elevation : 0;
-        const defElev = typeof target.elevation === 'number' ? target.elevation : 0;
-        if (defElev < atkElev) violated = true;
-        break;
+      switch (law.id) {
+        case 'no_backstab': {
+          const angle = actionContext.attackAngle || actionContext.forecast?.attackAngle || getRelativeDirection(attacker, target);
+          if (angle === 'Back') violated = true;
+          break;
+        }
+        case 'no_ranged': {
+          const ax = attacker.gridX !== undefined ? attacker.gridX : (attacker.x ?? 0);
+          const az = attacker.gridZ !== undefined ? attacker.gridZ : (attacker.z ?? 0);
+          const tx = target.gridX !== undefined ? target.gridX : (target.x ?? 0);
+          const tz = target.gridZ !== undefined ? target.gridZ : (target.z ?? 0);
+          const dist = Math.abs(ax - tx) + Math.abs(az - tz);
+          if (dist > 2) violated = true;
+          break;
+        }
+        case 'no_magic': {
+          const isMagic = !!(ability?.isMagic || wType === 'tome' || wType === 'harp' ||
+            ability?.anim === 'Casting' || ability?.anim === 'Read Book' ||
+            ability?.anim === 'Play Instrument' || ability?.anim === 'Singing');
+          if (isMagic) violated = true;
+          break;
+        }
+        case 'no_blades': {
+          const isBlade = wType === 'sword' || wType === 'katana' ||
+            ability?.animPrefix === 'Swing' || ability?.anim === 'Katana Use';
+          if (isBlade) violated = true;
+          break;
+        }
+        case 'no_low_blow': {
+          const atkElev = typeof attacker.elevation === 'number' ? attacker.elevation : 0;
+          const defElev = typeof target.elevation === 'number' ? target.elevation : 0;
+          if (defElev < atkElev) violated = true;
+          break;
+        }
       }
     }
 
     if (!violated) {
-      return { violated: false, law, cardType: null, penaltyText: '' };
+      const result = { violated: false, law, cardType: null, penaltyText: '' };
+      if (!actionContext.preview) {
+        this.lawCompliantStreak = (this.lawCompliantStreak || 0) + 1;
+        if (this.lawCompliantStreak % 3 === 0) {
+          result.lawBonusOrbs = 15;
+          result.lawBonusReason = '3x Lawful Strike Streak';
+        }
+      }
+      return result;
     }
 
-    const isSim = !!(actionContext.preview || actionContext.simulate);
-    const willBeRed = (attacker.yellowCards || 0) >= 1;
-    const cardType = willBeRed ? 'RED' : 'YELLOW';
+    let redCard = false;
+    let penalty = null;
 
-    if (!isSim) {
-      if (willBeRed) {
+    if (!actionContext.preview) {
+      this.lawCompliantStreak = 0;
+      attacker.yellowCards = (attacker.yellowCards || 0) + 1;
+      if ((attacker.yellowCards || 0) >= 2) {
+        redCard = true;
+        penalty = 'RED_CARD_PRISON';
+      }
+      if (redCard) {
         attacker.redCards = (attacker.redCards || 0) + 1;
-      } else {
-        attacker.yellowCards = (attacker.yellowCards || 0) + 1;
+        attacker.inPrison = true;
+        attacker.alive = false;
+        attacker.isDead = true;
+        attacker.hp = 0;
+      }
+    } else {
+      if ((attacker.yellowCards || 0) >= 1) {
+        redCard = true;
+        penalty = 'RED_CARD_PRISON';
       }
     }
 
-    const penaltyText = cardType === 'RED'
-      ? `JUDGE PENALTY: ${attacker.name} committed a repeat offense under ${law.name} (${law.forbidden})! RED CARD issued!`
+    const cardType = redCard ? 'RED' : 'YELLOW';
+    const penaltyText = redCard
+      ? `JUDGE PENALTY: ${attacker.name} received a RED CARD (repeat violation of ${law.name})! Banished to Prison!`
       : `JUDGE WARNING: ${attacker.name} violated ${law.name} (${law.forbidden})! YELLOW CARD issued!`;
 
     return {
       violated: true,
       law,
       cardType,
+      redCard,
+      penalty,
       penaltyText
     };
   }
@@ -197,7 +221,7 @@ export class TurnManager {
    */
   nextTurn(units = []) {
     const livingUnits = units.filter(
-      (u) => u && u.alive !== false && (u.hp === undefined || u.hp > 0)
+      (u) => u && u.alive !== false && !u.isDead && (u.hp === undefined || u.hp > 0) && !u.inPrison
     );
 
     if (livingUnits.length === 0) {
@@ -286,7 +310,7 @@ export class TurnManager {
    */
   getTurnQueuePreview(units = [], count = 8) {
     const simUnits = units
-      .filter((u) => u && u.alive !== false && (u.hp === undefined || u.hp > 0))
+      .filter((u) => u && u.alive !== false && !u.isDead && (u.hp === undefined || u.hp > 0) && !u.inPrison)
       .map((u) => {
         const className = u.className || u.job || u.class || 'Knight';
         const weaponType = u.weapon?.weaponModel || u.weapon?.heldModelName || u.weapon?.weaponType || u.weaponType || 'sword';
@@ -388,7 +412,7 @@ export class TurnManager {
     }
 
     const livingUnits = allUnits.filter(
-      (u) => u && u.alive !== false && (u.hp === undefined || u.hp > 0)
+      (u) => u && u.alive !== false && !u.isDead && (u.hp === undefined || u.hp > 0) && !u.inPrison
     );
 
     const enemies = livingUnits.filter((u) => u.team !== aiUnit.team);
@@ -444,7 +468,16 @@ export class TurnManager {
 
       for (const ability of availableAbilities) {
         const isSupport = !!ability.isSupport;
-        const candidateTargets = isSupport ? allies : enemies;
+        let candidateTargets;
+        if (ability?.isRevive) {
+          candidateTargets = allUnits.filter(
+            (u) => u && u.team === aiUnit.team && !u.inPrison && (u.isDead || u.alive === false || (u.hp !== undefined && u.hp <= 0))
+          );
+        } else if (isSupport) {
+          candidateTargets = allies;
+        } else {
+          candidateTargets = enemies;
+        }
 
         const attackableTiles = getAttackableTiles(
           ghostAttacker,
@@ -456,15 +489,21 @@ export class TurnManager {
 
         for (const target of candidateTargets) {
           // Check if target tile is in range
+          const targetX = target.gridX !== undefined ? target.gridX : (target.x ?? 0);
+          const targetZ = target.gridZ !== undefined ? target.gridZ : (target.z ?? 0);
           const inRange = attackableTiles.some(
-            (t) => t.x === target.gridX && t.z === target.gridZ
+            (t) => t.x === targetX && t.z === targetZ
           );
           if (!inRange) continue;
 
           const forecast = calculateCombatForecast(ghostAttacker, target, ability, board, this.activeLaw);
           let score = 0;
 
-          if (isSupport) {
+          if (ability?.isRevive) {
+            score = 650;
+            // Small movement penalty to favor conserving CT / resting if in range
+            score -= (moveTile.cost || 0) * 1.5;
+          } else if (isSupport) {
             const maxHp = target.maxHp || 100;
             const currentHp = target.hp ?? maxHp;
             const missingHp = maxHp - currentHp;
@@ -577,9 +616,11 @@ export class TurnManager {
 
     // 4. If an attack/heal action was found, execute it and face the target
     if (bestAction && bestScore > 0) {
+      const targetX = bestAction.targetUnit.gridX !== undefined ? bestAction.targetUnit.gridX : (bestAction.targetUnit.x ?? 0);
+      const targetZ = bestAction.targetUnit.gridZ !== undefined ? bestAction.targetUnit.gridZ : (bestAction.targetUnit.z ?? 0);
       const endFacing = calculateFacing(bestAction.moveTile, {
-        x: bestAction.targetUnit.gridX,
-        z: bestAction.targetUnit.gridZ
+        x: targetX,
+        z: targetZ
       });
 
       return {

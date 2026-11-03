@@ -392,9 +392,11 @@ export function mapToolToWeaponSpec(toolItem, className) {
   const cls = (className || '').toLowerCase();
   const combined = `${itemName} ${cls}`;
 
+  let spec = null;
+
   // 1. Spear (spear, lance, pike, halberd, trident, dragoon, vanguard)
   if (/(spear|lance|pike|halberd|trident|dragoon|vanguard)/i.test(combined)) {
-    return {
+    spec = {
       weaponType: 'spear',
       heldModelName: 'spear',
       attackRange: { min: 1, max: 2 },
@@ -413,21 +415,22 @@ export function mapToolToWeaponSpec(toolItem, className) {
         },
         {
           id: 'dragoon_jump',
-          name: 'Dragoon Jump',
-          range: { min: 1, max: 4 },
-          anim: 'Dragoon Jump 3',
-          animPrefix: 'Dragoon Jump 3',
-          powerMult: 1.35,
-          costMp: 8,
-          description: 'Leap high into the air and crash down upon a distant foe.'
+          name: 'Sky Leap',
+          range: { min: 1, max: 3 },
+          anim: 'High Jump Start',
+          animPrefix: 'High Jump Start',
+          animationName: 'High Jump Start',
+          isDragoonJump: true,
+          powerMult: 1.55,
+          costMp: 14,
+          ignoresElevation: true,
+          description: 'Sky leap into the air and crash down upon a distant foe ignoring elevation.'
         }
       ]
     };
-  }
-
-  // 2. Katana (katana, blade, messer, samurai, blademaster, shadowalker, assassin)
-  if (/(katana|blade|messer|samurai|blademaster|shadowalker|assassin)/i.test(combined)) {
-    return {
+  } else if (/(katana|blade|messer|samurai|blademaster|shadowalker|assassin)/i.test(combined)) {
+    // 2. Katana (katana, blade, messer, samurai, blademaster, shadowalker, assassin)
+    spec = {
       weaponType: 'katana',
       heldModelName: 'katana',
       attackRange: { min: 1, max: 1 },
@@ -444,22 +447,47 @@ export function mapToolToWeaponSpec(toolItem, className) {
           description: 'Swift single-stroke slash drawing a lightning-fast edge.'
         },
         {
-          id: 'blade_throw',
-          name: 'Blade Throw',
-          range: { min: 2, max: 4 },
+          id: 'steal',
+          name: 'Plunder Gear',
+          range: { min: 1, max: 1 },
+          anim: 'Steal',
+          animPrefix: 'Steal',
+          animationName: 'Steal',
+          isSteal: true,
+          powerMult: 0.65,
+          costMp: 6,
+          description: 'Plunder enemy gear and orbs at close range.'
+        },
+        {
+          id: 'steal_heart',
+          name: 'Steal Heart',
+          range: { min: 1, max: 2 },
+          anim: 'Steal Heart',
+          animPrefix: 'Steal Heart',
+          animationName: 'Steal Heart',
+          isCharm: true,
+          statusEffect: 'confused',
+          powerMult: 0.5,
+          costMp: 10,
+          description: 'Charms enemy, inducing confused status.'
+        },
+        {
+          id: 'weapon_throw',
+          name: 'Blade Hurl',
+          range: { min: 2, max: 3 },
           anim: 'Weapon Throw',
           animPrefix: 'Weapon Throw',
-          powerMult: 1.05,
-          costMp: 4,
+          animationName: 'Weapon Throw',
+          isWeaponThrow: true,
+          powerMult: 1.35,
+          costMp: 12,
           description: 'Hurls a concealed throwing blade with deadly precision.'
         }
       ]
     };
-  }
-
-  // 3. Bow (bow, longbow, shortbow, crossbow, archer, hunter)
-  if (/(bow|longbow|shortbow|crossbow|archer|hunter)/i.test(combined)) {
-    return {
+  } else if (/(bow|longbow|shortbow|crossbow|archer|hunter)/i.test(combined)) {
+    // 3. Bow (bow, longbow, shortbow, crossbow, archer, hunter)
+    spec = {
       weaponType: 'bow',
       heldModelName: 'bow',
       attackRange: { min: 2, max: 5 },
@@ -487,11 +515,9 @@ export function mapToolToWeaponSpec(toolItem, className) {
         }
       ]
     };
-  }
-
-  // 4. Cloth Bag Flail (bag, pouch, flail, sachel, alchemist, merchant)
-  if (/(bag|pouch|flail|sachel|alchemist|merchant)/i.test(combined)) {
-    return {
+  } else if (/(bag|pouch|flail|sachel|alchemist|merchant)/i.test(combined)) {
+    // 4. Cloth Bag Flail (bag, pouch, flail, sachel, alchemist, merchant)
+    spec = {
       weaponType: 'cloth_bag',
       heldModelName: 'cloth_bag',
       attackRange: { min: 1, max: 2 },
@@ -517,14 +543,25 @@ export function mapToolToWeaponSpec(toolItem, className) {
           statusProc: 'confused',
           costMp: 8,
           description: 'Cracks an orb-dense pouch against the foe, disorienting their senses.'
+        },
+        {
+          id: 'heavy_stone',
+          name: 'Boulder Lob',
+          range: { min: 2, max: 4 },
+          anim: 'Dragoon Jump 3',
+          animPrefix: 'Dragoon Jump 3',
+          animationName: 'Dragoon Jump 3',
+          isHeavyStone: true,
+          knockback: 1,
+          powerMult: 1.25,
+          costMp: 10,
+          description: 'Hurls a massive boulder with ballistic knockback.'
         }
       ]
     };
-  }
-
-  // 5. Rifle (rifle, gun, musket, pistol, gunner, fusilier, machinist)
-  if (/(rifle|gun|musket|pistol|gunner|fusilier|machinist)/i.test(combined)) {
-    return {
+  } else if (/(rifle|gun|musket|pistol|gunner|fusilier|machinist)/i.test(combined)) {
+    // 5. Rifle (rifle, gun, musket, pistol, gunner, fusilier, machinist)
+    spec = {
       weaponType: 'rifle',
       heldModelName: 'rifle',
       attackRange: { min: 2, max: 5 },
@@ -552,11 +589,9 @@ export function mapToolToWeaponSpec(toolItem, className) {
         }
       ]
     };
-  }
-
-  // 6. Tome (tome, book, staff, wand, orb, mesmer, oracle, scholar, mage, wizard, warlock)
-  if (/(tome|book|staff|wand|orb|mesmer|oracle|scholar|mage|wizard|warlock)/i.test(combined)) {
-    return {
+  } else if (/(tome|book|staff|wand|orb|mesmer|oracle|scholar|mage|wizard|warlock)/i.test(combined)) {
+    // 6. Tome (tome, book, staff, wand, orb, mesmer, oracle, scholar, mage, wizard, warlock)
+    spec = {
       weaponType: 'tome',
       heldModelName: 'tome',
       attackRange: { min: 1, max: 4 },
@@ -595,14 +630,26 @@ export function mapToolToWeaponSpec(toolItem, className) {
           healPower: 45,
           costMp: 8,
           description: 'Restores 45 HP to a wounded ally within 3 tiles.'
+        },
+        {
+          id: 'cast_revive',
+          name: 'Phoenix Revive',
+          range: { min: 1, max: 3 },
+          anim: 'Cast Revive',
+          animPrefix: 'Cast Revive',
+          animationName: 'Cast Revive',
+          isSupport: true,
+          isRevive: true,
+          targetsDead: true,
+          healPower: 65,
+          costMp: 18,
+          description: 'Resurrects a fallen ally with 65 HP.'
         }
       ]
     };
-  }
-
-  // 7. Harp (harp, lute, horn, flute, herald, bard, minstrel, cantor)
-  if (/(harp|lute|horn|flute|herald|bard|minstrel|cantor)/i.test(combined)) {
-    return {
+  } else if (/(harp|lute|horn|flute|herald|bard|minstrel|cantor)/i.test(combined)) {
+    // 7. Harp (harp, lute, horn, flute, herald, bard, minstrel, cantor)
+    spec = {
       weaponType: 'harp',
       heldModelName: 'harp',
       attackRange: { min: 1, max: 4 },
@@ -630,14 +677,26 @@ export function mapToolToWeaponSpec(toolItem, className) {
           powerMult: 1.10,
           costMp: 5,
           description: 'Emits a piercing acoustic note dealing magic damage.'
+        },
+        {
+          id: 'cast_revive',
+          name: 'Phoenix Revive',
+          range: { min: 1, max: 3 },
+          anim: 'Cast Revive',
+          animPrefix: 'Cast Revive',
+          animationName: 'Cast Revive',
+          isSupport: true,
+          isRevive: true,
+          targetsDead: true,
+          healPower: 65,
+          costMp: 18,
+          description: 'Resurrects a fallen ally with 65 HP.'
         }
       ]
     };
-  }
-
-  // 8. Shield (shield, buckler, aegis, bulwark, juggernaut, defender)
-  if (/(shield|buckler|aegis|bulwark|juggernaut|defender)/i.test(combined)) {
-    return {
+  } else if (/(shield|buckler|aegis|bulwark|juggernaut|defender)/i.test(combined)) {
+    // 8. Shield (shield, buckler, aegis, bulwark, juggernaut, defender)
+    spec = {
       weaponType: 'shield',
       heldModelName: 'shield',
       attackRange: { min: 1, max: 1 },
@@ -664,50 +723,211 @@ export function mapToolToWeaponSpec(toolItem, className) {
           healPower: 25,
           costMp: 6,
           description: 'Hunker down behind fortified tower shield, recovering 25 HP and +15 CT.'
+        },
+        {
+          id: 'heavy_stone',
+          name: 'Boulder Lob',
+          range: { min: 2, max: 4 },
+          anim: 'Dragoon Jump 3',
+          animPrefix: 'Dragoon Jump 3',
+          animationName: 'Dragoon Jump 3',
+          isHeavyStone: true,
+          knockback: 1,
+          powerMult: 1.25,
+          costMp: 10,
+          description: 'Hurls a massive boulder with ballistic knockback.'
+        }
+      ]
+    };
+  } else {
+    // 9. Default: Sword (sword, greatsword, mace, hammer, knight, etc.)
+    spec = {
+      weaponType: 'sword',
+      heldModelName: 'sword',
+      attackRange: { min: 1, max: 1 },
+      baseAnimPrefix: 'Swing',
+      abilities: [
+        {
+          id: 'mythril_cleave',
+          name: 'Mythril Cleave',
+          range: { min: 1, max: 1 },
+          anim: 'Swing Mid',
+          animPrefix: 'Swing',
+          powerMult: 1.15,
+          costMp: 4,
+          description: 'Standard martial cleave slicing through guard.'
+        },
+        {
+          id: 'crushing_blow',
+          name: 'Crushing Blow',
+          range: { min: 1, max: 1 },
+          anim: 'Swing High',
+          animPrefix: 'Swing',
+          powerMult: 1.35,
+          costMp: 7,
+          description: 'Heavy overhead strike dealing +35% damage.'
+        },
+        {
+          id: 'heavy_stone',
+          name: 'Boulder Lob',
+          range: { min: 2, max: 4 },
+          anim: 'Dragoon Jump 3',
+          animPrefix: 'Dragoon Jump 3',
+          animationName: 'Dragoon Jump 3',
+          isHeavyStone: true,
+          knockback: 1,
+          powerMult: 1.25,
+          costMp: 10,
+          description: 'Hurls a massive boulder with ballistic knockback.'
+        },
+        {
+          id: 'steal',
+          name: 'Plunder Gear',
+          range: { min: 1, max: 1 },
+          anim: 'Steal',
+          animPrefix: 'Steal',
+          animationName: 'Steal',
+          isSteal: true,
+          powerMult: 0.65,
+          costMp: 6,
+          description: 'Plunder enemy gear and orbs at close range.'
+        },
+        {
+          id: 'steal_heart',
+          name: 'Steal Heart',
+          range: { min: 1, max: 2 },
+          anim: 'Steal Heart',
+          animPrefix: 'Steal Heart',
+          animationName: 'Steal Heart',
+          isCharm: true,
+          statusEffect: 'confused',
+          powerMult: 0.5,
+          costMp: 10,
+          description: 'Charms enemy, inducing confused status.'
+        },
+        {
+          id: 'weapon_throw',
+          name: 'Blade Hurl',
+          range: { min: 2, max: 3 },
+          anim: 'Weapon Throw',
+          animPrefix: 'Weapon Throw',
+          animationName: 'Weapon Throw',
+          isWeaponThrow: true,
+          powerMult: 1.35,
+          costMp: 12,
+          description: 'Hurls a concealed throwing blade with deadly precision.'
         }
       ]
     };
   }
 
-  // 9. Default: Sword (sword, greatsword, mace, hammer, knight, etc.)
-  return {
-    weaponType: 'sword',
-    heldModelName: 'sword',
-    attackRange: { min: 1, max: 1 },
-    baseAnimPrefix: 'Swing',
-    abilities: [
-      {
-        id: 'mythril_cleave',
-        name: 'Mythril Cleave',
-        range: { min: 1, max: 1 },
-        anim: 'Swing Mid',
-        animPrefix: 'Swing',
-        powerMult: 1.15,
-        costMp: 4,
-        description: 'Standard martial cleave slicing through guard.'
-      },
-      {
-        id: 'crushing_blow',
-        name: 'Crushing Blow',
-        range: { min: 1, max: 1 },
-        anim: 'Swing High',
-        animPrefix: 'Swing',
-        powerMult: 1.35,
-        costMp: 7,
-        description: 'Heavy overhead strike dealing +35% damage.'
-      },
-      {
-        id: 'throw_stone',
-        name: 'Throw Stone',
+  // Cross-archetype guarantee checks:
+  // Phoenix Revive: tome, shield (Paladin), harp (Herald), and Scholar
+  if (/(tome|harp|scholar|herald|paladin)/i.test(combined) || spec.weaponType === 'tome' || spec.weaponType === 'harp') {
+    if (!spec.abilities.some((a) => a.id === 'cast_revive')) {
+      spec.abilities.push({
+        id: 'cast_revive',
+        name: 'Phoenix Revive',
         range: { min: 1, max: 3 },
+        anim: 'Cast Revive',
+        animPrefix: 'Cast Revive',
+        animationName: 'Cast Revive',
+        isSupport: true,
+        isRevive: true,
+        targetsDead: true,
+        healPower: 65,
+        costMp: 18,
+        description: 'Resurrects a fallen ally with 65 HP.'
+      });
+    }
+  }
+
+  // Thief / Rogue & Katana Skills: katana, sword, Samurai, Ninja, Ranger, Deadeye
+  if (/(katana|sword|samurai|ninja|ranger|deadeye|thief|rogue)/i.test(combined) || spec.weaponType === 'katana' || spec.weaponType === 'sword') {
+    if (!spec.abilities.some((a) => a.id === 'steal')) {
+      spec.abilities.push({
+        id: 'steal',
+        name: 'Plunder Gear',
+        range: { min: 1, max: 1 },
+        anim: 'Steal',
+        animPrefix: 'Steal',
+        animationName: 'Steal',
+        isSteal: true,
+        powerMult: 0.65,
+        costMp: 6,
+        description: 'Plunder enemy gear and orbs at close range.'
+      });
+    }
+    if (!spec.abilities.some((a) => a.id === 'steal_heart')) {
+      spec.abilities.push({
+        id: 'steal_heart',
+        name: 'Steal Heart',
+        range: { min: 1, max: 2 },
+        anim: 'Steal Heart',
+        animPrefix: 'Steal Heart',
+        animationName: 'Steal Heart',
+        isCharm: true,
+        statusEffect: 'confused',
+        powerMult: 0.5,
+        costMp: 10,
+        description: 'Charms enemy, inducing confused status.'
+      });
+    }
+    if (!spec.abilities.some((a) => a.id === 'weapon_throw')) {
+      spec.abilities.push({
+        id: 'weapon_throw',
+        name: 'Blade Hurl',
+        range: { min: 2, max: 3 },
+        anim: 'Weapon Throw',
+        animPrefix: 'Weapon Throw',
+        animationName: 'Weapon Throw',
+        isWeaponThrow: true,
+        powerMult: 1.35,
+        costMp: 12,
+        description: 'Hurls a concealed throwing blade with deadly precision.'
+      });
+    }
+  }
+
+  // Heavy Stone Ballistic Knockback: cloth_bag, Juggernaut, Vanguard, Berserker, Knight
+  if (/(cloth_bag|juggernaut|vanguard|berserker|knight)/i.test(combined) || spec.weaponType === 'cloth_bag') {
+    if (!spec.abilities.some((a) => a.id === 'heavy_stone')) {
+      spec.abilities.push({
+        id: 'heavy_stone',
+        name: 'Boulder Lob',
+        range: { min: 2, max: 4 },
         anim: 'Dragoon Jump 3',
         animPrefix: 'Dragoon Jump 3',
-        powerMult: 0.85,
-        costMp: 0,
-        description: 'Picks up and hurls a stone at mid range.'
-      }
-    ]
-  };
+        animationName: 'Dragoon Jump 3',
+        isHeavyStone: true,
+        knockback: 1,
+        powerMult: 1.25,
+        costMp: 10,
+        description: 'Hurls a massive boulder with ballistic knockback.'
+      });
+    }
+  }
+
+  // Dragoon Sky Leap: spear, Dragoon, Lance
+  if (/(spear|lance|dragoon)/i.test(combined) || spec.weaponType === 'spear') {
+    if (!spec.abilities.some((a) => a.id === 'dragoon_jump')) {
+      spec.abilities.push({
+        id: 'dragoon_jump',
+        name: 'Sky Leap',
+        range: { min: 1, max: 3 },
+        anim: 'High Jump Start',
+        animPrefix: 'High Jump Start',
+        animationName: 'High Jump Start',
+        isDragoonJump: true,
+        powerMult: 1.55,
+        costMp: 14,
+        ignoresElevation: true,
+        description: 'Sky leap into the air and crash down upon a distant foe ignoring elevation.'
+      });
+    }
+  }
+
+  return spec;
 }
 
 /**
@@ -853,6 +1073,78 @@ export function generateFullEquipment(unitSeed, charClass, weaponSpec, grade = '
     legs,
     finger
   };
+}
+
+/**
+ * Applies a Set.world equipment item to a unit's 6-slot paperdoll
+ * (tool, offhand, head, chest, legs, finger) and applies stat bonuses.
+ */
+export function applyEquipmentToUnit(unit, item, targetSlot = null) {
+  if (!unit || !item) return { slot: targetSlot || null, unit };
+
+  let slot = targetSlot || item.slot || (item.type === 'armor' ? 'chest' : 'tool');
+  const sLower = String(slot).toLowerCase();
+  if (sLower === 'weapon') slot = 'tool';
+  else if (sLower === 'shield') slot = 'offhand';
+  else if (sLower === 'armor') slot = 'chest';
+  else if (sLower === 'ring' || sLower === 'neck') slot = 'finger';
+  else if (sLower === 'feet' || sLower === 'boots') slot = 'legs';
+
+  unit.equipment = unit.equipment || {};
+  unit.equipment[slot] = item;
+  unit.stats = unit.stats || {};
+
+  if (slot === 'tool') {
+    const raw = item.rawItem || item;
+    const spec = mapToolToWeaponSpec(raw, unit.className || unit.class || unit.job);
+    unit.weapon = spec;
+    unit.weaponType = spec.weaponType;
+    unit.heldModelName = spec.heldModelName;
+    unit.abilities = spec.abilities;
+    unit.attackRange = spec.attackRange;
+    unit.finishTier = item.finishTier || unit.finishTier;
+    unit.stars = (item.stars !== undefined ? item.stars : item.boostStars) ?? unit.stars;
+    unit.elementalPrefix = item.elementalPrefix || unit.elementalPrefix;
+  } else {
+    const tierMult = { F: 1, E: 2, D: 3, C: 4, B: 6, A: 9, S: 14 }[item.grade || item.tier || 'B'] || 5;
+    const starBonus = ((item.stars !== undefined ? item.stars : item.boostStars) || 0) * 3;
+    const bonus = tierMult + starBonus;
+
+    if (slot === 'head') {
+      unit.maxHp = (unit.maxHp || 100) + bonus * 3;
+      unit.hp = (unit.hp || 100) + bonus * 3;
+      if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 3;
+      unit.magicResistance = (unit.magicResistance || 0) + bonus;
+      unit.stats.magicResistance = (unit.stats.magicResistance || 0) + bonus;
+    } else if (slot === 'chest') {
+      unit.maxHp = (unit.maxHp || 100) + bonus * 5;
+      unit.hp = (unit.hp || 100) + bonus * 5;
+      if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 5;
+      unit.armor = (unit.armor || 0) + bonus * 2;
+      unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
+    } else if (slot === 'legs') {
+      const moveBonus = Math.min(2, Math.ceil(bonus / 5));
+      unit.moveRange = (unit.moveRange || 3) + moveBonus;
+      unit.move = (unit.move !== undefined ? unit.move : (unit.moveRange || 3)) + moveBonus;
+      unit.speed = (unit.speed || 15) + bonus;
+      unit.dodge = (unit.dodge || 0) + bonus;
+      unit.stats.moveRange = unit.moveRange;
+      unit.stats.speed = (unit.stats.speed || 15) + bonus;
+      unit.stats.dodge = (unit.stats.dodge || 0) + bonus;
+    } else if (slot === 'offhand') {
+      unit.armor = (unit.armor || 0) + bonus * 2;
+      unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
+      unit.blockChance = (unit.blockChance || 0) + bonus;
+      unit.stats.blockChance = (unit.stats.blockChance || 0) + bonus;
+    } else if (slot === 'finger') {
+      unit.magicDamage = (unit.magicDamage || 0) + bonus * 2;
+      unit.stats.magicDamage = (unit.stats.magicDamage || 0) + bonus * 2;
+      unit.speed = (unit.speed || 15) + bonus;
+      unit.stats.speed = (unit.stats.speed || 15) + bonus;
+    }
+  }
+
+  return { slot, unit };
 }
 
 /**
@@ -1133,6 +1425,15 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
     const speed = Math.round((charData.attributes?.walkSpeed || 1.0) * 10) + (isBoss ? 7 : 6);
     const moveRange = 3 + (charData.attributes?.walkSpeed > 1.25 ? 1 : 0);
 
+    const canTeleport = !!(
+      /mesmer|scholar/i.test(className) ||
+      rank === 'HEXER' ||
+      paletteId === 'azure_mage' ||
+      paletteId === 'crimson_hexer' ||
+      (isBlue && slot === 1) ||
+      (!isBlue && slot === 2)
+    );
+
     const unit = {
       id: `unit_${team}_${slot}`,
       unitId: `unit_${team}_${slot}`,
@@ -1163,6 +1464,7 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       speed,
       moveRange,
       jumpHeight: 2,
+      canTeleport,
       gridX: pos.x,
       gridZ: pos.z,
       x: pos.x,

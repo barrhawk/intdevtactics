@@ -5,6 +5,7 @@
  */
 
 import { deriveSeed, generateFallbackItem } from './setworld-client.js';
+import { collide } from '@engine/weapons/ballistics';
 
 export const DIRECTIONS_8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -227,6 +228,9 @@ export function getReachableTiles(unit, board, allUnits = []) {
     unit.elementalPrefix === 'Celestial' ||
     unit.weapon?.elementalPrefix === 'Celestial';
 
+  const canTeleportOrFloat = !!(unit.canTeleport || unit.status === 'floating' || isFloating);
+  const maxJump = canTeleportOrFloat ? 8 : jumpHeight;
+
   while (queue.length > 0) {
     // Dijkstra priority: lowest cost first
     queue.sort((a, b) => a.cost - b.cost);
@@ -254,11 +258,11 @@ export function getReachableTiles(unit, board, allUnits = []) {
       if (enemyOccupied.has(nKey)) continue;
 
       const nElev = nTile.elevation ?? 0;
-      // Elevation jump check
-      if (Math.abs(nElev - currElev) > jumpHeight) continue;
+      // Elevation jump check (up to 8 for teleport/floating)
+      if (Math.abs(nElev - currElev) > maxJump) continue;
 
-      // Moving into a water tile costs 2 movement points unless floating / Celestial (costs 1)
-      const stepCost = (isWater && !isFloating) ? 2 : 1;
+      // Moving into a water tile costs 2 movement points unless floating / Celestial / teleport (costs 1)
+      const stepCost = (isWater && !canTeleportOrFloat) ? 2 : 1;
       const nextCost = current.cost + stepCost;
       if (nextCost > moveRange) continue;
 
@@ -352,6 +356,11 @@ export function getElevationStance(attackerElev = 0, defenderElev = 0) {
  * Resolves exact 3d.internet.dev animation name for the attack based on weapon, ability, and stance.
  */
 export function resolveAttackAnimation(unit, ability, stance = 'Mid') {
+  // If ability has an explicit animationName, use it directly
+  if (ability?.animationName) {
+    return ability.animationName;
+  }
+
   // If ability has a specific animation name, use it directly
   if (ability?.anim) {
     // If the ability anim already specifies a stance or is a full name
@@ -359,23 +368,17 @@ export function resolveAttackAnimation(unit, ability, stance = 'Mid') {
       return ability.anim;
     }
     // Fixed animations without stances
-    if (['Katana Use', 'Read Book', 'Read Book 2', 'Play Instrument', 'Singing', 'Casting', 'Dragoon Jump 3', 'Weapon Throw', 'Cast Revive'].includes(ability.anim)) {
+    if (['Katana Use', 'Read Book', 'Read Book 2', 'Play Instrument', 'Singing', 'Casting', 'Dragoon Jump 3', 'Weapon Throw', 'Cast Revive', 'High Jump Start', 'Steal', 'Steal Heart'].includes(ability.anim)) {
       return ability.anim;
     }
   }
 
   if (ability?.animPrefix) {
-    if (ability.animPrefix === 'Item Throw') {
-      return `Item Throw ${stance} Release`;
-    }
-    if (ability.animPrefix === 'Read Book' || ability.animPrefix === 'Read Book 2') {
+    if (['Cast Revive', 'High Jump Start', 'Steal', 'Steal Heart', 'Weapon Throw', 'Dragoon Jump 3', 'Read Book', 'Read Book 2', 'Play Instrument', 'Katana Use'].includes(ability.animPrefix)) {
       return ability.animPrefix;
     }
-    if (ability.animPrefix === 'Play Instrument') {
-      return 'Play Instrument';
-    }
-    if (ability.animPrefix === 'Katana Use') {
-      return 'Katana Use';
+    if (ability.animPrefix === 'Item Throw') {
+      return `Item Throw ${stance} Release`;
     }
     return `${ability.animPrefix} ${stance}`;
   }
@@ -430,6 +433,23 @@ export function calculateCombatForecast(attacker, defender, ability, board, acti
 
   const animationName = resolveAttackAnimation(attacker, ability, stance);
   const heldModelName = attacker?.weapon?.heldModelName || attacker?.weapon?.weaponType || 'sword';
+
+  // Support isRevive / Phoenix Revive handling
+  if (ability?.isRevive) {
+    return {
+      expectedDamage: 0,
+      expectedHeal: ability.healPower || 65,
+      hitChance: 100,
+      critChance: 0,
+      stance,
+      attackAngle,
+      animationName: 'Cast Revive',
+      heldModelName,
+      isSupport: true,
+      isRevive: true,
+      orbRewardEstimate: 35
+    };
+  }
 
   // Support / Healing ability handling
   if (ability?.isSupport) {
@@ -566,6 +586,34 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
   const mpCost = ability?.costMp || 0;
   attacker.mp = Math.max(0, (attacker.mp ?? 40) - mpCost);
 
+  // Handle Phoenix Revive / Revive
+  if (ability?.isRevive) {
+    defender.alive = true;
+    defender.isDead = false;
+    const healPower = ability.healPower || 65;
+    const currentHp = (defender.hp && defender.hp > 0) ? defender.hp : 0;
+    defender.hp = Math.min(
+      defender.maxHp || 100,
+      Math.max(1, currentHp + healPower)
+    );
+    const defenderAnim = 'Revived';
+    return {
+      hit: true,
+      crit: false,
+      blocked: false,
+      damage: 0,
+      heal: healPower,
+      revived: true,
+      orbsEarned: 35,
+      attackerAnim: forecast.animationName || 'Cast Revive',
+      defenderAnim,
+      defenderDead: false,
+      statusApplied: null,
+      lootDrop: null,
+      forecast
+    };
+  }
+
   // Handle Support / Healing
   if (forecast.isSupport) {
     const healPower = ability.healPower || 35;
@@ -617,6 +665,28 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     };
   }
 
+  let damage = forecast.expectedDamage;
+  let defenderAnim = 'Taking Damage';
+  let orbsEarned = rng.nextInt(15, 30);
+
+  // Steal Gear & Orbs
+  let stolenItem = null;
+  let stolenOrbs = 0;
+  if (ability?.isSteal) {
+    const seed = deriveSeed(defender.seed || 0x1337, Date.now() & 0xffff);
+    stolenItem = generateFallbackItem(seed);
+    stolenOrbs = 35;
+    orbsEarned = (orbsEarned || 0) + stolenOrbs;
+  }
+
+  // Steal Heart / Charm Effect
+  let statusApplied = null;
+  if (ability?.isCharm) {
+    defender.status = 'confused';
+    defender.statusTurns = 2;
+    statusApplied = 'confused';
+  }
+
   // Roll Crit
   const critRoll = rng.nextInt(1, 100);
   const isCrit = critRoll <= forecast.critChance;
@@ -626,10 +696,6 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
   const hasShield = defender.equipment?.offhand || defender.weapon?.heldModelName === 'shield';
   const blockRoll = rng.nextInt(1, 100);
   const isBlocked = !isCrit && isFront && (hasShield || defender.stats?.armor > 12) && blockRoll <= 18;
-
-  let damage = forecast.expectedDamage;
-  let defenderAnim = 'Taking Damage';
-  let orbsEarned = rng.nextInt(15, 30);
 
   if (isBlocked) {
     damage = Math.max(1, Math.floor(damage * 0.35));
@@ -654,8 +720,7 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
   // Status Proc Check:
   // When an attack hits and defender survives (defender.hp > 0), check if ability or weapon has statusProc
   // (35% proc chance on basic attacks, 65% on special skills)
-  let statusApplied = null;
-  if (defender.alive) {
+  if (defender.alive && !statusApplied) {
     const statusProc = ability?.statusProc || attacker?.weapon?.statusProc;
     if (statusProc) {
       const isSpecialSkill = !!(ability && (
@@ -697,7 +762,7 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     };
   }
 
-  return {
+  const outcome = {
     hit: true,
     crit: isCrit,
     blocked: isBlocked,
@@ -711,4 +776,73 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     lootDrop,
     forecast
   };
+
+  if (ability?.isSteal) {
+    outcome.stolenItem = stolenItem;
+    outcome.stolenOrbs = stolenOrbs;
+  }
+
+  // Ballistic Knockback (collide())
+  if ((ability?.knockback || ability?.isHeavyStone) && outcome.hit && !outcome.defenderDead && board) {
+    const impact = collide(1.0, 120, 3.0, 0.2);
+    const defX = defender.gridX !== undefined ? defender.gridX : (defender.x ?? 0);
+    const defZ = defender.gridZ !== undefined ? defender.gridZ : (defender.z ?? 0);
+    const atkX = attacker.gridX !== undefined ? attacker.gridX : (attacker.x ?? 0);
+    const atkZ = attacker.gridZ !== undefined ? attacker.gridZ : (attacker.z ?? 0);
+
+    const diffX = defX - atkX;
+    const diffZ = defZ - atkZ;
+    let stepX = Math.sign(diffX);
+    let stepZ = Math.sign(diffZ);
+
+    if (stepX !== 0 && stepZ !== 0) {
+      if (Math.abs(diffX) >= Math.abs(diffZ)) {
+        stepZ = 0;
+      } else {
+        stepX = 0;
+      }
+    }
+    if (stepX === 0 && stepZ === 0) {
+      stepX = 1;
+    }
+
+    const kbX = defX + stepX;
+    const kbZ = defZ + stepZ;
+    const inBounds = kbX >= 0 && kbX < (board.width || 10) && kbZ >= 0 && kbZ < (board.height || 10);
+    const kbTile = (board && typeof board.getTile === 'function')
+      ? board.getTile(kbX, kbZ)
+      : (inBounds ? getBoardTile(board, kbX, kbZ) : null);
+
+    let isOccupied = false;
+    if (typeof board.getUnitAt === 'function') {
+      const u = board.getUnitAt(kbX, kbZ);
+      if (u && u !== defender && u.alive !== false && (u.hp === undefined || u.hp > 0)) {
+        isOccupied = true;
+      }
+    }
+    if (!isOccupied && (Array.isArray(board.units) || Array.isArray(board.allUnits))) {
+      const unitsList = board.units || board.allUnits;
+      isOccupied = unitsList.some(
+        (u) => u && u !== defender && u.alive !== false && (u.hp === undefined || u.hp > 0) &&
+          ((u.gridX === kbX || u.x === kbX) && (u.gridZ === kbZ || u.z === kbZ))
+      );
+    }
+
+    if (inBounds && kbTile && kbTile.passable !== false && !isOccupied) {
+      defender.gridX = kbX;
+      defender.gridZ = kbZ;
+      defender.x = kbX;
+      defender.z = kbZ;
+      defender.elevation = kbTile.elevation ?? defender.elevation;
+      outcome.knockbackTile = {
+        x: kbX,
+        z: kbZ,
+        elevation: defender.elevation,
+        targetKick: impact.struck,
+        stoneAfter: impact.after
+      };
+    }
+  }
+
+  return outcome;
 }
