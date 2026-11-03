@@ -6,6 +6,8 @@
  * Command Menu, Combat Forecast Card, Overhead Unit Bars & Damage Popups.
  */
 
+import { getUnitPassive, computeSetWorldResonance } from './forge-modal.js';
+
 export class TacticalHUD {
   /**
    * @param {HTMLElement} containerEl - The root HUD container (e.g. #tactics-ui)
@@ -14,6 +16,7 @@ export class TacticalHUD {
    * @param {(ability: any) => void} [callbacks.onSelectAbility]
    * @param {() => void} [callbacks.onOpenWaitCompass]
    * @param {(facing: string) => void} [callbacks.onConfirmEndTurn]
+   * @param {(facing: string) => void} [callbacks.onPreviewFacing]
    * @param {() => void} [callbacks.onCancelMode]
    * @param {() => void} [callbacks.onConfirmCombat]
    * @param {(deltaDegOrDir: number|string) => void} [callbacks.onRotateCamera]
@@ -21,6 +24,9 @@ export class TacticalHUD {
    * @param {() => void} [callbacks.onToggleAutoBattle]
    * @param {() => void} [callbacks.onTogglePhysicsDebug]
    * @param {() => void} [callbacks.onToggleRaidBoss]
+   * @param {() => void} [callbacks.onToggleFreeRoam]
+   * @param {() => void} [callbacks.onToggleGauntlet]
+   * @param {() => void} [callbacks.onOpenSpriteStudio]
    * @param {() => void} [callbacks.onNewSeed]
    * @param {() => void} [callbacks.onOpenForge]
    * @param {(switchInfo: any) => void} [callbacks.onFlipSwitch]
@@ -42,6 +48,10 @@ export class TacticalHUD {
       turnNumber: 1,
       raidBossMode: false,
       physicsDebug: false,
+      freeRoam: false,
+      gauntletFloor: 1,
+      gauntletMaxFloors: 5,
+      gauntletActive: false,
     };
     this.activeUnit = null;
     this.currentMode = 'standby'; // 'standby' | 'menu' | 'move' | 'act' | 'wait' | 'animating'
@@ -99,6 +109,15 @@ export class TacticalHUD {
         </button>
         <button class="hud-btn gold" id="btn-open-forge" title="Set.world Clan Forge & Barracks [F]">
           <span>✦ [F] Clan Forge</span>
+        </button>
+        <button class="hud-btn" id="btn-open-studio" title="Open 3d.internet.dev Interactive Sprite Studio [4]">
+          <span>[🎞️ STUDIO]</span>
+        </button>
+        <button class="hud-btn topbar-freeroam-badge" id="btn-toggle-freeroam" title="Toggle Real-Time Free-Roam Exploration Mode">
+          <span id="hud-freeroam-label">[🕹️ FREE-ROAM: OFF]</span>
+        </button>
+        <button class="hud-btn topbar-gauntlet-badge" id="btn-toggle-gauntlet" title="5-Floor Set.world Tower Gauntlet">
+          <span id="hud-gauntlet-label">[🏰 GAUNTLET: FL 1/5]</span>
         </button>
         <button class="hud-btn" id="btn-toggle-auto" title="Toggle AI Auto-Battle [A]">
           <span id="hud-auto-label">[A] Auto: OFF</span>
@@ -246,6 +265,27 @@ export class TacticalHUD {
       this.callbacks.onOpenForge?.();
     });
 
+    const btnStudio = this.elements.topBar.querySelector('#btn-open-studio');
+    if (btnStudio) {
+      btnStudio.addEventListener('click', () => {
+        this.callbacks.onOpenSpriteStudio?.();
+      });
+    }
+
+    const btnFreeRoam = this.elements.topBar.querySelector('#btn-toggle-freeroam');
+    if (btnFreeRoam) {
+      btnFreeRoam.addEventListener('click', () => {
+        this.callbacks.onToggleFreeRoam?.();
+      });
+    }
+
+    const btnGauntlet = this.elements.topBar.querySelector('#btn-toggle-gauntlet');
+    if (btnGauntlet) {
+      btnGauntlet.addEventListener('click', () => {
+        this.callbacks.onToggleGauntlet?.();
+      });
+    }
+
     this.elements.topBar.querySelector('#btn-toggle-auto').addEventListener('click', () => {
       this.callbacks.onToggleAutoBattle?.();
     });
@@ -312,7 +352,7 @@ export class TacticalHUD {
         case '4':
           if (this.activeUnit && this.currentMode === 'menu') {
             e.preventDefault();
-            this.callbacks.onOpenForge?.();
+            this.callbacks.onOpenSpriteStudio?.();
           }
           break;
         case 'ENTER':
@@ -338,7 +378,7 @@ export class TacticalHUD {
   /**
    * Set Top Bar state (seed, orbs, camera, auto-battle, physicsDebug, etc.)
    */
-  setHeaderState({ seed, orbs, cameraStep, compassLabel, autoBattle, turnNumber, raidBossMode, physicsDebug } = {}) {
+  setHeaderState({ seed, orbs, cameraStep, compassLabel, autoBattle, turnNumber, raidBossMode, physicsDebug, freeRoam, gauntletFloor, gauntletActive, gauntletMaxFloors } = {}) {
     if (seed !== undefined) {
       this.headerState.seed = seed;
       const seedEl = this.container.querySelector('#hud-seed-badge');
@@ -401,9 +441,66 @@ export class TacticalHUD {
         }
       }
     }
+    if (freeRoam !== undefined) {
+      this.headerState.freeRoam = freeRoam;
+      const frBtn = this.container.querySelector('#btn-toggle-freeroam');
+      const frLbl = this.container.querySelector('#hud-freeroam-label');
+      if (frBtn && frLbl) {
+        frBtn.classList.toggle('active', freeRoam);
+        frLbl.textContent = freeRoam ? '🕹️ [FREE-ROAM: ON]' : '[🕹️ FREE-ROAM: OFF]';
+      }
+      this.showFreeRoamBanner(freeRoam);
+    }
+    if (gauntletFloor !== undefined || gauntletActive !== undefined || gauntletMaxFloors !== undefined) {
+      if (gauntletFloor !== undefined) this.headerState.gauntletFloor = gauntletFloor;
+      if (gauntletActive !== undefined) this.headerState.gauntletActive = gauntletActive;
+      if (gauntletMaxFloors !== undefined) this.headerState.gauntletMaxFloors = gauntletMaxFloors;
+      const gtBtn = this.container.querySelector('#btn-toggle-gauntlet');
+      const gtLbl = this.container.querySelector('#hud-gauntlet-label');
+      if (gtBtn && gtLbl) {
+        gtBtn.classList.toggle('active', !!this.headerState.gauntletActive);
+        gtLbl.textContent = `[🏰 GAUNTLET: FL ${this.headerState.gauntletFloor || 1}/${this.headerState.gauntletMaxFloors || 5}]`;
+      }
+    }
     if (turnNumber !== undefined) {
       this.headerState.turnNumber = turnNumber;
     }
+  }
+
+  showFreeRoamBanner(show) {
+    let banner = this.container.querySelector('#free-roam-floating-banner');
+    if (show) {
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'free-roam-floating-banner';
+        banner.className = 'free-roam-floating-banner';
+        banner.innerHTML = `
+          <span>🕹️ FREE-ROAM MODE</span>
+          <span style="color: var(--text-muted);">—</span>
+          <span>WASD/Arrows: Move & Wade | SPACE: Jump Ledge | F: Quick Throw Black Marble | E: Slash | Q: Perform | ESC: Exit</span>
+        `;
+        this.container.appendChild(banner);
+      }
+      banner.style.display = 'flex';
+    } else if (banner) {
+      banner.style.display = 'none';
+    }
+  }
+
+  showCelebrationBanner(title, subtitle = '', durationMs = 3500) {
+    const banner = document.createElement('div');
+    banner.className = 'celebration-banner';
+    banner.innerHTML = `
+      <div style="font-size: 15px; color: var(--text-gold); margin-bottom: 4px;">${title}</div>
+      ${subtitle ? `<div style="font-size: 11px; color: #f8fafc;">${subtitle}</div>` : ''}
+    `;
+    this.container.appendChild(banner);
+    setTimeout(() => {
+      banner.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+      banner.style.opacity = '0';
+      banner.style.transform = 'translate(-50%, -20px)';
+      setTimeout(() => banner.remove(), 400);
+    }, durationMs);
   }
 
   /**
@@ -561,6 +658,9 @@ export class TacticalHUD {
     const agi = stats.agi ?? stats.AGI ?? (stats.walkSpeed ? Math.round(stats.walkSpeed * 25) : 30);
     const vit = stats.vit ?? stats.VIT ?? 32;
 
+    const passive = getUnitPassive(unit);
+    const resonances = computeSetWorldResonance(unit);
+
     card.innerHTML = `
       <div class="card-top-row">
         <div>
@@ -620,6 +720,17 @@ export class TacticalHUD {
         <div class="stat-pill"><span class="stat-pill-label">AGI</span><span class="stat-pill-val">${agi}</span></div>
         <div class="stat-pill"><span class="stat-pill-label">VIT</span><span class="stat-pill-val">${vit}</span></div>
       </div>
+
+      <div class="unit-passive-row" title="${passive.desc}">
+        <span class="passive-title">${passive.name}</span>
+        <span class="passive-desc">// ${passive.desc}</span>
+      </div>
+
+      ${resonances.length > 0 ? `
+        <div class="resonances-container">
+          ${resonances.map((r) => `<span class="resonance-chip" title="${r.desc}">${r.name}</span>`).join('')}
+        </div>
+      ` : ''}
     `;
   }
 
@@ -697,7 +808,7 @@ export class TacticalHUD {
 
     const btnInspect = menu.querySelector('#btn-cmd-inspect');
     if (btnInspect) {
-      btnInspect.addEventListener('click', () => this.callbacks.onOpenForge?.());
+      btnInspect.addEventListener('click', () => this.callbacks.onOpenSpriteStudio?.());
     }
 
     const btnCancel = menu.querySelector('#btn-cmd-cancel');
@@ -796,8 +907,14 @@ export class TacticalHUD {
     `;
 
     compass.querySelectorAll('.compass-btn[data-dir]').forEach((btn) => {
+      const dir = btn.getAttribute('data-dir');
+      btn.addEventListener('mouseenter', () => {
+        this.callbacks.onPreviewFacing?.(dir);
+      });
+      btn.addEventListener('focus', () => {
+        this.callbacks.onPreviewFacing?.(dir);
+      });
       btn.addEventListener('click', () => {
-        const dir = btn.getAttribute('data-dir');
         this.callbacks.onConfirmEndTurn?.(dir);
       });
     });
@@ -877,6 +994,9 @@ export class TacticalHUD {
     const agi = stats.agi ?? stats.AGI ?? (stats.walkSpeed ? Math.round(stats.walkSpeed * 25) : 28);
     const vit = stats.vit ?? stats.VIT ?? 30;
 
+    const passive = getUnitPassive(unit);
+    const resonances = computeSetWorldResonance(unit);
+
     container.innerHTML = `
       <div class="unit-status-card target-unit ${isAzure ? 'azure' : 'crimson'} ${isBoss ? 'boss' : ''}">
         <div class="card-top-row">
@@ -927,6 +1047,17 @@ export class TacticalHUD {
           <div class="stat-pill"><span class="stat-pill-label">AGI</span><span class="stat-pill-val">${agi}</span></div>
           <div class="stat-pill"><span class="stat-pill-label">VIT</span><span class="stat-pill-val">${vit}</span></div>
         </div>
+
+        <div class="unit-passive-row" title="${passive.desc}">
+          <span class="passive-title">${passive.name}</span>
+          <span class="passive-desc">// ${passive.desc}</span>
+        </div>
+
+        ${resonances.length > 0 ? `
+          <div class="resonances-container">
+            ${resonances.map((r) => `<span class="resonance-chip" title="${r.desc}">${r.name}</span>`).join('')}
+          </div>
+        ` : ''}
       </div>
     `;
   }
