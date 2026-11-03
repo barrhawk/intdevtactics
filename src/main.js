@@ -19,7 +19,26 @@ import { IsometricBoard } from './stage/isometric-board.js';
 import { StageUnitManager } from './stage/unit-actor.js';
 import { TurnManager } from './game/turn-manager.js';
 import { TacticalHUD } from './ui/tactical-hud.js';
-import { ForgeModal, normalizeSlot, EQUIPMENT_SLOTS, computeSetWorldResonance } from './ui/forge-modal.js';
+import {
+  ForgeModal,
+  normalizeSlot,
+  EQUIPMENT_SLOTS,
+  computeSetWorldResonance,
+  GUARANTEE_CRAFT_COSTS,
+  craftGuaranteedTier,
+  salvageEquipmentItem,
+  calculateEnemyDropOrbs,
+  recordOrbLedgerEntry,
+  getOrbLedger,
+  ensureUnitSetWorldData
+} from './ui/forge-modal.js';
+import {
+  StratagemModal,
+  evaluateUnitStratagem,
+  exportStratagemJSON,
+  importStratagemJSON,
+  createDefaultStratagem
+} from './ui/stratagem-modal.js';
 import { SpriteStudioModal } from './ui/sprite-studio-modal.js';
 import * as SetWorldClient from './game/setworld-client.js';
 import * as CombatRules from './game/combat-rules.js';
@@ -457,14 +476,27 @@ class TacticsGame {
       onToggleFreeRoam: () => this.toggleFreeRoamMode(),
       onToggleGauntlet: () => this.toggleGauntletMode(),
       onOpenSpriteStudio: () => this.openSpriteStudio(),
+      onOpenStratagems: () => this.openStratagemModal(),
       onNewSeed: () => this.rollNewBattlefield(),
       onOpenForge: () => this.openForgeModal(),
       onFlipSwitch: (switchInfo) => this.executeFlipSwitch(switchInfo)
     });
 
+    // Anima Stratagem Gambit AI Editor Modal
+    this.stratagemModal = new StratagemModal(document.body, {
+      onSaveStratagem: (unit, stratagem) => {
+        unit.stratagem = stratagem;
+        this.tacticalHud.addLog(
+          `🧠 Stratagem updated for ${unit.name} [${stratagem.rules.length} rules].`,
+          'system'
+        );
+      }
+    });
+
     // Set.world Clan Forge Modal Callbacks
     this.forgeModal = new ForgeModal(document.body, {
       onCraftItem: (orbs) => this.handleCraftItem(orbs),
+      onGuaranteeCraft: (tier, slot) => this.handleGuaranteeCraft(tier, slot),
       onBoostItem: (index) => this.handleBoostItem(index),
       onSalvageItem: (index, yieldOrbs) => this.handleSalvageItem(index, yieldOrbs),
       onEquipItem: (index, unitId, slot) => this.handleEquipItem(index, unitId, slot),
@@ -549,7 +581,7 @@ class TacticsGame {
 
     this.units = rosterData.units;
 
-    // Ensure synchronized x/gridX and z/gridZ coordinates on all units
+    // Ensure synchronized x/gridX and z/gridZ coordinates on all units & hydrate 9-stats and stratagems
     for (const unit of this.units) {
       if (unit.x === undefined && unit.gridX !== undefined) unit.x = unit.gridX;
       if (unit.z === undefined && unit.gridZ !== undefined) unit.z = unit.gridZ;
@@ -558,6 +590,7 @@ class TacticsGame {
       unit.hasMoved = false;
       unit.hasActed = false;
       unit.standHeight = 18;
+      ensureUnitSetWorldData(unit);
     }
 
     // Re-apply ALL equipped inventory items across all 6 slots so forged armor, shields, rings, and weapons persist across matches
@@ -674,6 +707,8 @@ class TacticsGame {
   _syncForgeRoster() {
     const azureUnits = this.units.filter((u) => u.team === 'blue' || u.team === 'azure');
     const rosterUnits = azureUnits.map((u) => {
+      ensureUnitSetWorldData(u);
+
       const eq = {
         tool: u.equipment?.tool || { name: u.weapon?.name || (u.weapon?.heldModelName ? `${u.weapon.heldModelName.toUpperCase()} Blade` : 'Mythril Broadsword'), tier: u.grade || 'B', slot: 'tool' },
         offhand: u.equipment?.offhand || { name: u.equipment?.shield?.name || (u.className === 'Knight' ? 'Kite Shield' : u.className === 'Paladin' ? 'Holy Aegis' : 'Focus Orb'), tier: 'B', slot: 'offhand' },
@@ -701,16 +736,14 @@ class TacticsGame {
         job: u.className || u.job,
         grade: u.grade,
         powerRating: u.rawCharacter?.powerRating || 750,
+        finalStats: u.finalStats,
+        advantage: u.advantage,
+        disadvantage: u.disadvantage,
+        talent: u.talent,
+        birthCertificate: u.birthCertificate,
+        stratagem: u.stratagem,
         stats: {
-          STR: u.stats?.physicalDamage || 35,
-          DEX: u.stats?.accuracy || 30,
-          INT: u.stats?.magicDamage || 25,
-          AGI: Math.round((u.stats?.walkSpeed || 1.0) * 25),
-          VIT: Math.round((u.stats?.maxHealth || 100) * 0.35),
-          WIS: u.stats?.magicResistance || 24,
-          WIL: 28,
-          LUK: u.stats?.dodge || 15,
-          DEF: u.stats?.armor || 20
+          ...u.finalStats
         },
         traits: ['Set Heritage', `${u.className} Discipline`],
         equippedTool: eq.tool?.name ? `${eq.tool.name} (✦ ${eq.tool.orbValue || 125} Orbs)` : `${u.weapon?.heldModelName ? u.weapon.heldModelName.toUpperCase() : 'WEAPON'} (✦ 125 Orbs)`,
@@ -1235,6 +1268,23 @@ class TacticsGame {
           const lootData = outcome.lootDrop || { orbs: 35, x: defX, z: defZ };
           this.stageUnitManager.spawnLootBag?.(defX, defZ, this.isometricBoard, lootData);
           this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${defX}, ${defZ})!`, 'loot');
+
+          // Set.world /api/drop calculation on enemy defeat
+          const isEnemyDefeated = (defender.team || '').toLowerCase() === 'crimson' || (defender.team || '').toLowerCase() === 'red';
+          if (isEnemyDefeated) {
+            const dropResult = calculateEnemyDropOrbs(defender, this.baseSeed);
+            const dropOrbs = typeof dropResult === 'number' ? dropResult : (dropResult?.dropOrbs ?? dropResult?.orbs ?? 35);
+            this.playerOrbs += dropOrbs;
+            this.statsSummary.orbsWon = (this.statsSummary.orbsWon || 0) + dropOrbs;
+            this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+            this.tacticalHud.addLog(
+              `✦ [/api/drop] Defeated ${defender.name}! Set.world 9-stat drop computed: +${dropOrbs} Orbs!`,
+              'loot'
+            );
+            if (this.forgeModal) {
+              this.forgeModal.updateState({ orbs: this.playerOrbs });
+            }
+          }
         }
       } else {
         this.tacticalHud.spawnFloatingText(headAnchor, 'MISS', 'miss', this.projectWorldToScreen);
@@ -1482,12 +1532,67 @@ class TacticsGame {
       this.tacticalHud.setActiveUnit(aiUnit, 'animating');
       this.isometricBoard.clearHighlights();
 
-      // Compute tactical decision via high-level evaluation
-      const decision = this.turnManager.computeTacticalAI(
-        aiUnit,
-        this.units,
-        this.isometricBoard
-      );
+      // Compute reachable tiles for movement and stratagems
+      const reachableTiles = getReachableTiles(aiUnit, this.isometricBoard, this.units);
+
+      // Evaluate Anima StratagemDocument Gambits
+      let stratagemDecision = null;
+      try {
+        ensureUnitSetWorldData(aiUnit);
+        stratagemDecision = evaluateUnitStratagem(
+          aiUnit,
+          this.units,
+          reachableTiles,
+          this.isometricBoard,
+          this.activeLaw
+        );
+      } catch (stratErr) {
+        console.warn('[TacticsGame] evaluateUnitStratagem error:', stratErr);
+      }
+
+      let decision;
+
+      if (stratagemDecision && stratagemDecision.matchedRule) {
+        const { matchedRule, moveTile, targetUnit, ability, actionType } = stratagemDecision;
+        const condLbl = matchedRule.conditionLabel || matchedRule.condition;
+        const actLbl = matchedRule.actionLabel || matchedRule.action;
+
+        this.tacticalHud.addLog(
+          `🧠 [STRATAGEM #${matchedRule.index + 1}] ${aiUnit.name}: IF ${condLbl} ➔ ${actLbl}`,
+          'system'
+        );
+
+        let movePath = [];
+        const startTile = { x: aiUnit.x ?? aiUnit.gridX ?? 0, z: aiUnit.z ?? aiUnit.gridZ ?? 0 };
+        const destTile = moveTile || startTile;
+
+        if (destTile.x !== startTile.x || destTile.z !== startTile.z) {
+          movePath = this.turnManager.findPath(
+            startTile,
+            destTile,
+            this.isometricBoard,
+            this.units,
+            aiUnit
+          );
+          if (!movePath || movePath.length === 0) {
+            movePath = [startTile, destTile];
+          }
+        }
+
+        decision = {
+          moveTile: destTile,
+          movePath,
+          ability: actionType !== 'wait' ? (ability || aiUnit.abilities?.[0]) : null,
+          targetUnit: actionType !== 'wait' ? targetUnit : null
+        };
+      } else {
+        // Fall back gracefully to the existing AI logic
+        decision = this.turnManager.computeTacticalAI(
+          aiUnit,
+          this.units,
+          this.isometricBoard
+        );
+      }
 
       // 1. Animate Movement if AI decided to reposition
       if (decision.movePath && decision.movePath.length > 1) {
@@ -1754,6 +1859,23 @@ class TacticsGame {
             const lootData = outcome.lootDrop || { orbs: 35, x: tgtX, z: tgtZ };
             this.stageUnitManager.spawnLootBag?.(tgtX, tgtZ, this.isometricBoard, lootData);
             this.tacticalHud.addLog(`✦ Loot Pouch dropped at (${tgtX}, ${tgtZ})!`, 'loot');
+
+            // Set.world /api/drop calculation on enemy defeat
+            const isEnemyDefeated = (target.team || '').toLowerCase() === 'crimson' || (target.team || '').toLowerCase() === 'red';
+            if (isEnemyDefeated) {
+              const dropResult = calculateEnemyDropOrbs(target, this.baseSeed);
+              const dropOrbs = typeof dropResult === 'number' ? dropResult : (dropResult?.dropOrbs ?? dropResult?.orbs ?? 35);
+              this.playerOrbs += dropOrbs;
+              this.statsSummary.orbsWon = (this.statsSummary.orbsWon || 0) + dropOrbs;
+              this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+              this.tacticalHud.addLog(
+                `✦ [/api/drop] Enemy ${target.name} defeated! Set.world 9-stat drop computed: +${dropOrbs} Orbs!`,
+                'loot'
+              );
+              if (this.forgeModal) {
+                this.forgeModal.updateState({ orbs: this.playerOrbs });
+              }
+            }
           }
         } else {
           this.tacticalHud.spawnFloatingText(
@@ -1982,6 +2104,17 @@ class TacticsGame {
     });
   }
 
+  openStratagemModal(unit = null) {
+    if (this.currentMode === 'animating') return;
+    const targetUnit = unit || this.activeUnit || this.units.find((u) => (u.team || 'azure').toLowerCase() === 'azure');
+    this.stratagemModal.open({
+      units: this.units,
+      selectedUnitId: targetUnit?.id,
+      board: this.isometricBoard,
+      activeLaw: this.activeLaw
+    });
+  }
+
   async handleCraftItem(orbs) {
     try {
       const craftResult = await craftItem(orbs, deriveSeed(this.baseSeed, Date.now()));
@@ -2015,6 +2148,17 @@ class TacticsGame {
         provenance: `https://set.world/craft?orbs=${orbs}&seed=${craftResult.seed}`
       };
 
+      recordOrbLedgerEntry({
+        type: 'craft_lottery',
+        endpoint: `/api/craft?orbs=${orbs}`,
+        timestamp: Date.now(),
+        itemName: forgedItem.name,
+        tier: grade,
+        candidateRolls: craftResult.rolls || Math.max(1, Math.floor(Math.sqrt(orbs / 2))),
+        orbsDelta: -orbs,
+        seed: this.baseSeed
+      });
+
       this.playerOrbs = Math.max(0, this.playerOrbs - orbs);
       this.playerInventory.unshift(forgedItem);
       this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
@@ -2032,6 +2176,37 @@ class TacticsGame {
     }
   }
 
+  async handleGuaranteeCraft(tier = 'C', slot = 'all') {
+    const cost = GUARANTEE_CRAFT_COSTS[tier] || 120;
+    if (this.playerOrbs < cost) {
+      this.tacticalHud.addLog(`⚠️ Insufficient Orbs: Need ${cost} Orbs for Guaranteed Tier ${tier}.`, 'system');
+      return null;
+    }
+
+    try {
+      const craftResult = await craftGuaranteedTier(tier, slot, this.baseSeed);
+      const forgedItem = craftResult.item;
+      const receipt = craftResult.receipt;
+
+      this.playerOrbs = Math.max(0, this.playerOrbs - cost);
+      this.playerInventory.unshift(forgedItem);
+
+      this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+      this._saveClanState();
+      this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
+
+      this.tacticalHud.addLog(
+        `👑 [/api/craft?tier=${tier}] Guaranteed ${forgedItem.name} [${(forgedItem.equippedSlot || forgedItem.type).toUpperCase()}] synthesized (-${cost} Orbs)!`,
+        'loot'
+      );
+
+      return { item: forgedItem, receipt, remainingOrbs: this.playerOrbs };
+    } catch (err) {
+      console.error('[TacticsGame] handleGuaranteeCraft error:', err);
+      return null;
+    }
+  }
+
   handleSalvageItem(itemOrIndex, yieldOrbs) {
     let item = null;
     let index = -1;
@@ -2045,7 +2220,9 @@ class TacticsGame {
 
     if (!item) return;
 
-    const actualYield = salvageItem(item.rawItem || item) || yieldOrbs || Math.max(1, Math.round((item.orbValue || 25) * 0.1));
+    const salvageResult = salvageEquipmentItem(item, this.baseSeed);
+    const actualYield = salvageResult?.orbsRecovered ?? salvageResult?.orbs ?? yieldOrbs ?? Math.max(2, Math.round((item.orbValue || 25) * 0.25));
+
     this.playerOrbs += actualYield;
 
     if (index >= 0 && index < this.playerInventory.length && this.playerInventory[index] === item) {
@@ -2059,7 +2236,7 @@ class TacticsGame {
     this._saveClanState();
     this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
     this.tacticalHud.addLog(
-      `✦ SALVAGED: ${item.name} disassembled for +${actualYield} Set Orbs (10% sink).`,
+      `✦ [/api/salvage] ${item.name} disassembled for +${actualYield} Set Orbs.`,
       'loot'
     );
   }
