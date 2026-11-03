@@ -18,7 +18,7 @@ import { IsometricBoard } from './stage/isometric-board.js';
 import { StageUnitManager } from './stage/unit-actor.js';
 import { TurnManager } from './game/turn-manager.js';
 import { TacticalHUD } from './ui/tactical-hud.js';
-import { ForgeModal } from './ui/forge-modal.js';
+import { ForgeModal, normalizeSlot } from './ui/forge-modal.js';
 import * as SetWorldClient from './game/setworld-client.js';
 import {
   generateClanRoster,
@@ -62,6 +62,17 @@ class TacticsGame {
 
     // Battle Configuration & Persistence
     this.baseSeed = 0x1337;
+    const urlSeedParam = new URLSearchParams(window.location.search).get('seed');
+    if (urlSeedParam) {
+      if (urlSeedParam.toLowerCase().startsWith('0x')) {
+        const parsed = parseInt(urlSeedParam, 16);
+        if (!isNaN(parsed)) this.baseSeed = parsed >>> 0;
+      } else {
+        const parsed = parseInt(urlSeedParam, 10);
+        if (!isNaN(parsed)) this.baseSeed = parsed >>> 0;
+      }
+    }
+
     this.playerOrbs = 450;
     this.raidBossMode = false;
     this.autoBattle = false;
@@ -101,7 +112,8 @@ class TacticsGame {
         material: 'Mythril Steel',
         statsBonus: '+12 STR, +4 VIT',
         rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Mythril Broadsword', slot: 'tool' },
-        equippedTo: 'unit_azure_0'
+        equippedTo: 'unit_azure_0',
+        equippedSlot: 'tool'
       },
       {
         id: 'item-init-2',
@@ -114,7 +126,8 @@ class TacticsGame {
         material: 'Ironwood & Mythril',
         statsBonus: '+14 DEX, +6 AGI',
         rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Composite Longbow', slot: 'tool' },
-        equippedTo: 'unit_azure_1'
+        equippedTo: 'unit_azure_1',
+        equippedSlot: 'tool'
       },
       {
         id: 'item-init-3',
@@ -127,7 +140,8 @@ class TacticsGame {
         material: 'Starlight Crystal',
         statsBonus: '+22 INT, +10 WIS',
         rawItem: { tier: 'A', tierGrade: 'A', orbValue: 625, name: 'Arcane Focus Rod', slot: 'tool' },
-        equippedTo: 'unit_azure_2'
+        equippedTo: 'unit_azure_2',
+        equippedSlot: 'tool'
       },
       {
         id: 'item-init-4',
@@ -140,7 +154,8 @@ class TacticsGame {
         material: 'Obsidian Glass',
         statsBonus: '+6 DEX, +4 LUK',
         rawItem: { tier: 'C', tierGrade: 'C', orbValue: 25, name: 'Obsidian Dirk', slot: 'tool' },
-        equippedTo: 'unit_azure_3'
+        equippedTo: 'unit_azure_3',
+        equippedSlot: 'tool'
       },
       {
         id: 'item-init-5',
@@ -152,10 +167,14 @@ class TacticsGame {
         orbValue: 125,
         material: 'Tempered Mythril',
         statsBonus: '+18 DEF, +8 VIT',
-        rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Tower Aegis Shield', slot: 'chest' },
-        equippedTo: null
+        rawItem: { tier: 'B', tierGrade: 'B', orbValue: 125, name: 'Tower Aegis Shield', slot: 'offhand' },
+        equippedTo: null,
+        equippedSlot: 'offhand'
       }
     ];
+
+    // Restore saved clan state from localStorage if available
+    this._loadClanState();
 
     // Initialize Subsystems
     this._initRenderer();
@@ -167,6 +186,35 @@ class TacticsGame {
 
     // Start lifecycle
     this.start();
+  }
+
+  _loadClanState() {
+    try {
+      const raw = localStorage.getItem('intdevtactics_clan_save_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.playerOrbs === 'number' && !isNaN(parsed.playerOrbs)) {
+          this.playerOrbs = parsed.playerOrbs;
+        }
+        if (Array.isArray(parsed.playerInventory) && parsed.playerInventory.length > 0) {
+          this.playerInventory = parsed.playerInventory;
+        }
+      }
+    } catch (err) {
+      console.warn('[TacticsGame] Error loading saved clan state:', err);
+    }
+  }
+
+  _saveClanState() {
+    try {
+      const data = {
+        playerOrbs: this.playerOrbs,
+        playerInventory: this.playerInventory
+      };
+      localStorage.setItem('intdevtactics_clan_save_v1', JSON.stringify(data));
+    } catch (err) {
+      console.warn('[TacticsGame] Error saving clan state to localStorage:', err);
+    }
   }
 
   /* ========================================================================
@@ -248,9 +296,11 @@ class TacticsGame {
       onRotateCamera: (delta) => this.rotateCamera(delta),
       onZoomCamera: (delta) => this.tacticalCamera.zoom(delta),
       onToggleAutoBattle: () => this.toggleAutoBattle(),
+      onTogglePhysicsDebug: () => this.togglePhysicsDebug(),
       onToggleRaidBoss: () => this.toggleRaidBossMode(),
       onNewSeed: () => this.rollNewBattlefield(),
-      onOpenForge: () => this.openForgeModal()
+      onOpenForge: () => this.openForgeModal(),
+      onFlipSwitch: (switchInfo) => this.executeFlipSwitch(switchInfo)
     });
 
     // Set.world Clan Forge Modal Callbacks
@@ -258,7 +308,7 @@ class TacticsGame {
       onCraftItem: (orbs) => this.handleCraftItem(orbs),
       onBoostItem: (index) => this.handleBoostItem(index),
       onSalvageItem: (index, yieldOrbs) => this.handleSalvageItem(index, yieldOrbs),
-      onEquipItem: (index, unitId) => this.handleEquipItem(index, unitId),
+      onEquipItem: (index, unitId, slot) => this.handleEquipItem(index, unitId, slot),
       onClose: () => {
         this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
       }
@@ -347,23 +397,65 @@ class TacticsGame {
       unit.standHeight = 18;
     }
 
-    // Re-apply equipped inventory items so Forge weapons persist across matches
+    // Re-apply ALL equipped inventory items across all 6 slots so forged armor, shields, rings, and weapons persist across matches
     for (const item of this.playerInventory) {
-      if (item.equippedTo && (item.type === 'weapon' || item.slot === 'tool')) {
+      if (item.equippedTo) {
         const u = this.units.find((unit) => unit.id === item.equippedTo);
         if (u) {
-          const newSpec = mapToolToWeaponSpec(item.rawItem || item, u.className);
-          u.weapon = newSpec;
-          u.weaponType = newSpec.weaponType;
-          u.heldModelName = newSpec.heldModelName;
-          u.abilities = newSpec.abilities;
-          u.attackRange = newSpec.attackRange;
+          const targetSlot = item.equippedSlot || normalizeSlot(item);
+          item.equippedSlot = targetSlot;
+          if (typeof SetWorldClient['applyEquipmentToUnit'] === 'function') {
+            SetWorldClient['applyEquipmentToUnit'](u, item, targetSlot);
+          } else {
+            u.equipment = u.equipment || {};
+            u.equipment[targetSlot] = item;
+            const stars = item.stars || item.boostStars || 0;
+            const grade = (item.grade || item.tierGrade || 'B').toUpperCase();
+            const bonus = (grade === 'S' ? 20 : grade === 'A' ? 14 : grade === 'B' ? 8 : grade === 'C' ? 4 : 2) + stars * 3;
+            u.stats = u.stats || {};
+            if (targetSlot === 'tool') {
+              const newSpec = mapToolToWeaponSpec(item.rawItem || item, u.className);
+              u.weapon = newSpec;
+              u.weaponType = newSpec.weaponType;
+              u.heldModelName = newSpec.heldModelName;
+              u.abilities = newSpec.abilities;
+              u.attackRange = newSpec.attackRange;
+              u.stats.physicalDamage = (u.stats.physicalDamage || 35) + bonus;
+              u.stats.STR = (u.stats.STR || 35) + bonus;
+            } else if (targetSlot === 'offhand' || targetSlot === 'chest' || targetSlot === 'head') {
+              u.stats.armor = (u.stats.armor || 20) + bonus;
+              u.stats.DEF = (u.stats.DEF || 20) + bonus;
+              u.maxHp = (u.maxHp || 100) + bonus * 2;
+              u.hp = u.maxHp;
+            } else if (targetSlot === 'legs') {
+              u.stats.AGI = (u.stats.AGI || 30) + bonus;
+              u.stats.walkSpeed = (u.stats.walkSpeed || 1.0) + (bonus * 0.04);
+            } else if (targetSlot === 'finger') {
+              u.stats.magicDamage = (u.stats.magicDamage || 25) + bonus;
+              u.stats.INT = (u.stats.INT || 25) + bonus;
+              u.maxMp = (u.maxMp || 40) + bonus;
+              u.mp = u.maxMp;
+            }
+          }
         }
       }
     }
 
     // Spawn 3D sprite actors and ground plinths
     this.stageUnitManager.spawnUnits(this.units, this.isometricBoard);
+
+    // Apply visual 3D weapon meshes for equipped tools
+    for (const item of this.playerInventory) {
+      if (item.equippedTo) {
+        const u = this.units.find((unit) => unit.id === item.equippedTo);
+        if (u) {
+          const slot = item.equippedSlot || normalizeSlot(item);
+          if (slot === 'tool' && u.heldModelName) {
+            this.stageUnitManager?.setUnitWeapon?.(u.id, u.heldModelName, u.team, item.finishTier);
+          }
+        }
+      }
+    }
 
     // Link sprite groups for screen projection and synchronize standHeight with actual actor stature
     for (const unit of this.units) {
@@ -414,36 +506,47 @@ class TacticsGame {
 
   _syncForgeRoster() {
     const azureUnits = this.units.filter((u) => u.team === 'blue' || u.team === 'azure');
-    const rosterUnits = azureUnits.map((u) => ({
-      id: u.id,
-      name: u.name,
-      job: u.className,
-      grade: u.grade,
-      powerRating: u.rawCharacter?.powerRating || 750,
-      stats: {
-        STR: u.stats?.physicalDamage || 35,
-        DEX: u.stats?.accuracy || 30,
-        INT: u.stats?.magicDamage || 25,
-        AGI: Math.round((u.stats?.walkSpeed || 1.0) * 25),
-        VIT: Math.round((u.stats?.maxHealth || 100) * 0.35),
-        WIS: u.stats?.magicResistance || 24,
-        WIL: 28,
-        LUK: u.stats?.dodge || 15,
-        DEF: u.stats?.armor || 20
-      },
-      traits: ['Set Heritage', `${u.className} Discipline`],
-      equippedTool: `${u.weapon?.heldModelName ? u.weapon.heldModelName.toUpperCase() : 'WEAPON'} (✦ 125 Orbs)`,
-      equippedArmor: 'Azure Clan Mail',
-      equipment: {
+    const rosterUnits = azureUnits.map((u) => {
+      const eq = {
         tool: u.equipment?.tool || { name: u.weapon?.name || (u.weapon?.heldModelName ? `${u.weapon.heldModelName.toUpperCase()} Blade` : 'Mythril Broadsword'), tier: u.grade || 'B', slot: 'tool' },
         offhand: u.equipment?.offhand || { name: u.equipment?.shield?.name || (u.className === 'Knight' ? 'Kite Shield' : u.className === 'Paladin' ? 'Holy Aegis' : 'Focus Orb'), tier: 'B', slot: 'offhand' },
         head: u.equipment?.head || { name: `${u.className} Visor`, tier: 'B', slot: 'head' },
         chest: u.equipment?.chest || { name: 'Azure Clan Mail', tier: 'A', slot: 'chest' },
         legs: u.equipment?.legs || { name: `${u.className} Greaves`, tier: 'B', slot: 'legs' },
         finger: u.equipment?.finger || { name: 'Band of Set Heritage', tier: 'A', slot: 'finger' }
-      },
-      seed: String(u.seed)
-    }));
+      };
+
+      for (const item of this.playerInventory) {
+        if (item.equippedTo === u.id) {
+          const slot = item.equippedSlot || normalizeSlot(item);
+          eq[slot] = item;
+        }
+      }
+
+      return {
+        id: u.id,
+        name: u.name,
+        job: u.className,
+        grade: u.grade,
+        powerRating: u.rawCharacter?.powerRating || 750,
+        stats: {
+          STR: u.stats?.physicalDamage || 35,
+          DEX: u.stats?.accuracy || 30,
+          INT: u.stats?.magicDamage || 25,
+          AGI: Math.round((u.stats?.walkSpeed || 1.0) * 25),
+          VIT: Math.round((u.stats?.maxHealth || 100) * 0.35),
+          WIS: u.stats?.magicResistance || 24,
+          WIL: 28,
+          LUK: u.stats?.dodge || 15,
+          DEF: u.stats?.armor || 20
+        },
+        traits: ['Set Heritage', `${u.className} Discipline`],
+        equippedTool: eq.tool?.name ? `${eq.tool.name} (✦ ${eq.tool.orbValue || 125} Orbs)` : `${u.weapon?.heldModelName ? u.weapon.heldModelName.toUpperCase() : 'WEAPON'} (✦ 125 Orbs)`,
+        equippedArmor: eq.chest?.name || 'Azure Clan Mail',
+        equipment: eq,
+        seed: String(u.seed)
+      };
+    });
 
     this.forgeModal.updateState({
       orbs: this.playerOrbs,
@@ -563,10 +666,47 @@ class TacticsGame {
     }
   }
 
+  togglePhysicsDebug() {
+    const active = !!(this.stageUnitManager?.togglePhysicsDebug?.());
+    this.tacticalHud.setHeaderState({ physicsDebug: active });
+    this.tacticalHud.addLog(
+      `🔬 3d.internet.dev Volumetric Physics Hulls & 6-Layer Inspector: ${active ? 'ACTIVE' : 'OFF'}`,
+      'system'
+    );
+    return active;
+  }
+
   enterCommandMenu() {
     this.currentMode = 'menu';
     this.isometricBoard.clearHighlights();
+    const adjSwitch = this.isometricBoard?.getAdjacentSwitch?.(this.activeUnit.gridX, this.activeUnit.gridZ);
+    this.activeUnit._adjacentSwitch = adjSwitch;
     this.tacticalHud.setActiveUnit(this.activeUnit, 'menu', null);
+  }
+
+  async executeFlipSwitch(switchInfo) {
+    if (!this.activeUnit || this.currentMode === 'animating') return;
+    const currentMatchId = this.matchId;
+    this.currentMode = 'animating';
+    this.tacticalHud.setActiveUnit(this.activeUnit, 'animating');
+    try {
+      if (typeof this.stageUnitManager?.animateFlipSwitch === 'function') {
+        await this.stageUnitManager.animateFlipSwitch(this.activeUnit, switchInfo, this.isometricBoard);
+      } else if (typeof this.isometricBoard?.toggleRuneSwitch === 'function') {
+        this.isometricBoard.toggleRuneSwitch(switchInfo?.x ?? switchInfo?.gridX, switchInfo?.z ?? switchInfo?.gridZ);
+      }
+      if (this.matchId !== currentMatchId) return;
+      this.tacticalHud.addLog(
+        `⚙️ ${this.activeUnit.name} flipped the Ancient Rune Switch! Floodgate causeways toggled!`,
+        'system'
+      );
+    } catch (err) {
+      console.error('[TacticsGame] executeFlipSwitch error:', err);
+    } finally {
+      if (this.matchId === currentMatchId) {
+        this.enterCommandMenu();
+      }
+    }
   }
 
   /* ========================================================================
@@ -827,6 +967,44 @@ class TacticsGame {
         this.tacticalHud.addLog(`${attacker.name}'s attack missed ${defender.name}!`, 'combat');
       }
 
+      // Handle Revive action
+      if (outcome.revived) {
+        defender.alive = true;
+        defender.isDead = false;
+        if (defender.hp <= 0) {
+          defender.hp = outcome.heal || Math.round((defender.maxHp || 100) * 0.5);
+        }
+        this.stageUnitManager?.reviveUnit?.(defender.id);
+        this.tacticalHud.addLog(`✨ ${attacker.name} resurrected ${defender.name} with ${ability.name}!`, 'combat');
+        this.tacticalHud.spawnFloatingText(headAnchor, '✨ REVIVED!', 'heal', this.projectWorldToScreen);
+      }
+
+      // Handle Plunder / Steal
+      if (outcome.stolenItem) {
+        this.playerInventory.unshift(outcome.stolenItem);
+        const stolenOrbs = outcome.stolenOrbs || 35;
+        this.playerOrbs += stolenOrbs;
+        this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+        this.tacticalHud.addLog(`🖐️ PLUNDERED: ${attacker.name} stole ${outcome.stolenItem.name} (+${stolenOrbs} Orbs)!`, 'loot');
+        this._syncForgeRoster();
+        this._saveClanState();
+      }
+
+      // Handle Knockback
+      if (outcome.knockbackTile) {
+        defender.gridX = outcome.knockbackTile.x;
+        defender.gridZ = outcome.knockbackTile.z;
+        defender.x = outcome.knockbackTile.x;
+        defender.z = outcome.knockbackTile.z;
+        if (outcome.knockbackTile.elevation !== undefined) {
+          defender.elevation = outcome.knockbackTile.elevation;
+        }
+        this.tacticalHud.addLog(
+          `💥 KNOCKBACK! ${defender.name} was blasted back to (${outcome.knockbackTile.x}, ${outcome.knockbackTile.z})!`,
+          'combat'
+        );
+      }
+
       // Apply status effects if triggered
       if (outcome.statusApplied) {
         defender.status = outcome.statusApplied;
@@ -893,7 +1071,24 @@ class TacticsGame {
       weaponModel
     });
 
-    if (result && (result.violated || result.penalty)) {
+    if (result?.redCard) {
+      this.tacticalHud.addLog(
+        `🟥 JUDGE RED CARD! ${attacker.name} committed a 2nd Law violation and is banished to Judge Prison!`,
+        'combat'
+      );
+      const anchor = this.stageUnitManager.getUnitScreenAnchor(attacker.id, this.isometricBoard);
+      this.tacticalHud.spawnFloatingText(anchor, '🟥 RED CARD: BANISHED!', 'crit', this.projectWorldToScreen);
+      const isPlayerClan = attacker.team === 'blue' || attacker.team === 'azure';
+      if (isPlayerClan) {
+        this.playerOrbs = Math.max(0, this.playerOrbs - 50);
+        this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+      }
+      attacker.alive = false;
+      attacker.isDead = true;
+      attacker.hp = 0;
+      this.stageUnitManager?.playDefeat?.(attacker.id);
+      this._saveClanState();
+    } else if (result && (result.violated || result.penalty)) {
       const lawName = result.lawName || result.law?.name || 'Judge Law';
       const reason = result.reason || 'Forbidden Action';
       this.tacticalHud.addLog(
@@ -908,6 +1103,19 @@ class TacticsGame {
 
       const anchor = this.stageUnitManager.getUnitScreenAnchor(attacker.id, this.isometricBoard);
       this.tacticalHud.spawnFloatingText(anchor, 'JUDGE: YELLOW CARD!', 'crit', this.projectWorldToScreen);
+      this._saveClanState();
+    }
+
+    if (result?.lawBonusOrbs) {
+      this.playerOrbs += result.lawBonusOrbs;
+      this.tacticalHud.addLog(
+        `⚖️ JUDGE LAW BONUS: +${result.lawBonusOrbs} Set Orbs (${result.lawBonusReason || 'Lawful Streak'})!`,
+        'loot'
+      );
+      this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+      const anchor = this.stageUnitManager.getUnitScreenAnchor(attacker.id, this.isometricBoard);
+      this.tacticalHud.spawnFloatingText(anchor, `+${result.lawBonusOrbs} LAW BONUS`, 'orbs', this.projectWorldToScreen);
+      this._saveClanState();
     }
 
     return result;
@@ -1175,6 +1383,49 @@ class TacticsGame {
           this.tacticalHud.addLog(`${aiUnit.name}'s attack missed!`, 'combat');
         }
 
+        // Handle Revive action
+        if (outcome.revived) {
+          target.alive = true;
+          target.isDead = false;
+          if (target.hp <= 0) {
+            target.hp = outcome.heal || Math.round((target.maxHp || 100) * 0.5);
+          }
+          this.stageUnitManager?.reviveUnit?.(target.id);
+          this.tacticalHud.addLog(`✨ ${aiUnit.name} resurrected ${target.name} with ${ability.name}!`, 'combat');
+          this.tacticalHud.spawnFloatingText(headAnchor, '✨ REVIVED!', 'heal', this.projectWorldToScreen);
+        }
+
+        // Handle Plunder / Steal
+        if (outcome.stolenItem) {
+          const isPlayerClan = aiUnit.team === 'blue' || aiUnit.team === 'azure';
+          if (isPlayerClan) {
+            this.playerInventory.unshift(outcome.stolenItem);
+            const stolenOrbs = outcome.stolenOrbs || 35;
+            this.playerOrbs += stolenOrbs;
+            this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+            this.tacticalHud.addLog(`🖐️ PLUNDERED: ${aiUnit.name} stole ${outcome.stolenItem.name} (+${stolenOrbs} Orbs)!`, 'loot');
+            this._syncForgeRoster();
+            this._saveClanState();
+          } else {
+            this.tacticalHud.addLog(`🖐️ PLUNDERED: ${aiUnit.name} plundered ${outcome.stolenItem.name} from ${target.name}!`, 'combat');
+          }
+        }
+
+        // Handle Knockback
+        if (outcome.knockbackTile) {
+          target.gridX = outcome.knockbackTile.x;
+          target.gridZ = outcome.knockbackTile.z;
+          target.x = outcome.knockbackTile.x;
+          target.z = outcome.knockbackTile.z;
+          if (outcome.knockbackTile.elevation !== undefined) {
+            target.elevation = outcome.knockbackTile.elevation;
+          }
+          this.tacticalHud.addLog(
+            `💥 KNOCKBACK! ${target.name} was blasted back to (${outcome.knockbackTile.x}, ${outcome.knockbackTile.z})!`,
+            'combat'
+          );
+        }
+
         this.tacticalHud.setInspectedTarget(null, null, null);
       }
 
@@ -1258,6 +1509,7 @@ class TacticsGame {
       this.statsSummary.turns = this.turnCount;
 
       this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+      this._saveClanState();
       this.tacticalHud.showVictoryBanner('azure', this.statsSummary, () => {
         this.rollNewBattlefield();
       });
@@ -1328,6 +1580,7 @@ class TacticsGame {
       this.playerOrbs = Math.max(0, this.playerOrbs - orbs);
       this.playerInventory.unshift(forgedItem);
       this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+      this._saveClanState();
 
       this.tacticalHud.addLog(
         `✦ FORGED [Grade ${forgedItem.grade}]: ${forgedItem.name} using ${orbs} Set Orbs.`,
@@ -1365,6 +1618,7 @@ class TacticsGame {
     }
 
     this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+    this._saveClanState();
     this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
     this.tacticalHud.addLog(
       `✦ SALVAGED: ${item.name} disassembled for +${actualYield} Set Orbs (10% sink).`,
@@ -1372,53 +1626,88 @@ class TacticsGame {
     );
   }
 
-  handleEquipItem(index, unitId) {
+  handleEquipItem(index, unitId, slot) {
     const item = this.playerInventory[index];
     if (!item) return;
 
-    // Clear previously equipped weapon on this unit if another item was equipped
+    const targetSlot = slot || item.equippedSlot || normalizeSlot(item);
+
+    // Unequip any other inventory item that was previously equipped to the same unitId AND the same targetSlot
     if (unitId) {
       for (let i = 0; i < this.playerInventory.length; i++) {
-        if (i !== index && this.playerInventory[i].equippedTo === unitId) {
-          if ((item.type === 'weapon' || item.slot === 'tool') &&
-              (this.playerInventory[i].type === 'weapon' || this.playerInventory[i].slot === 'tool')) {
-            this.playerInventory[i].equippedTo = null;
+        const otherItem = this.playerInventory[i];
+        if (i !== index && otherItem.equippedTo === unitId) {
+          const otherSlot = otherItem.equippedSlot || normalizeSlot(otherItem);
+          if (otherSlot === targetSlot) {
+            otherItem.equippedTo = null;
+            otherItem.equippedSlot = null;
           }
         }
       }
     }
 
     item.equippedTo = unitId || null;
+    item.equippedSlot = targetSlot;
 
     if (unitId) {
       const unit = this.units.find((u) => u.id === unitId);
       if (unit) {
-        if (item.type === 'weapon' || item.slot === 'tool') {
-          // Re-map weapon model and tactical abilities live!
-          const newSpec = mapToolToWeaponSpec(item.rawItem || item, unit.className);
-          unit.weapon = newSpec;
-          unit.weaponType = newSpec.weaponType;
-          unit.heldModelName = newSpec.heldModelName;
-          unit.abilities = newSpec.abilities;
-          unit.attackRange = newSpec.attackRange;
+        if (typeof SetWorldClient['applyEquipmentToUnit'] === 'function') {
+          SetWorldClient['applyEquipmentToUnit'](unit, item, targetSlot);
+        } else {
+          unit.equipment = unit.equipment || {};
+          unit.equipment[targetSlot] = item;
 
-          // Live hot-swap 3D idle weapon mesh on stage
-          if (this.stageUnitManager?.setUnitWeapon) {
-            this.stageUnitManager.setUnitWeapon(unit.id, newSpec.heldModelName, unit.team, item.finishTier);
+          const stars = item.stars || item.boostStars || 0;
+          const grade = (item.grade || item.tierGrade || 'B').toUpperCase();
+          const baseBonus = grade === 'S' ? 20 : grade === 'A' ? 14 : grade === 'B' ? 8 : grade === 'C' ? 4 : 2;
+          const totalBonus = baseBonus + stars * 3;
+
+          unit.stats = unit.stats || {};
+          if (targetSlot === 'tool') {
+            const newSpec = mapToolToWeaponSpec(item.rawItem || item, unit.className);
+            unit.weapon = newSpec;
+            unit.weaponType = newSpec.weaponType;
+            unit.heldModelName = newSpec.heldModelName;
+            unit.abilities = newSpec.abilities;
+            unit.attackRange = newSpec.attackRange;
+
+            unit.stats.physicalDamage = (unit.stats.physicalDamage || 35) + totalBonus;
+            unit.stats.STR = (unit.stats.STR || 35) + totalBonus;
+
+            if (this.stageUnitManager?.setUnitWeapon) {
+              this.stageUnitManager.setUnitWeapon(unit.id, newSpec.heldModelName, unit.team, item.finishTier);
+            }
+          } else if (targetSlot === 'offhand' || targetSlot === 'chest' || targetSlot === 'head') {
+            unit.stats.armor = (unit.stats.armor || 20) + totalBonus;
+            unit.stats.DEF = (unit.stats.DEF || 20) + totalBonus;
+            unit.maxHp = (unit.maxHp || 100) + totalBonus * 2;
+            unit.hp = Math.min(unit.maxHp, (unit.hp || 100) + totalBonus * 2);
+          } else if (targetSlot === 'legs') {
+            unit.stats.walkSpeed = (unit.stats.walkSpeed || 1.0) + (totalBonus * 0.05);
+            unit.stats.AGI = (unit.stats.AGI || 30) + totalBonus;
+          } else if (targetSlot === 'finger') {
+            unit.stats.magicDamage = (unit.stats.magicDamage || 25) + totalBonus;
+            unit.stats.INT = (unit.stats.INT || 25) + totalBonus;
+            unit.maxMp = (unit.maxMp || 40) + totalBonus;
+            unit.mp = Math.min(unit.maxMp, (unit.mp || 40) + totalBonus);
           }
+        }
 
-          this.tacticalHud.addLog(
-            `⚔️ EQUIPPED: ${unit.name} wields ${item.name} [3D Model: ${newSpec.heldModelName}].`,
-            'loot'
-          );
+        this.tacticalHud.addLog(
+          `⚔️ EQUIPPED [${targetSlot.toUpperCase()}]: ${unit.name} equipped ${item.name}.`,
+          'loot'
+        );
 
-          // Update active unit card if currently inspected
-          if (this.activeUnit === unit) {
-            this.tacticalHud.setActiveUnit(unit, this.currentMode, this.selectedAbility);
-          }
+        // Update active unit card if currently inspected
+        if (this.activeUnit === unit) {
+          this.tacticalHud.setActiveUnit(unit, this.currentMode, this.selectedAbility);
         }
       }
     }
+
+    this._syncForgeRoster();
+    this._saveClanState();
   }
 
   handleBoostItem(itemOrIndex) {
@@ -1474,6 +1763,7 @@ class TacticsGame {
     }
 
     this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+    this._saveClanState();
     this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
     this.tacticalHud.addLog(
       `✦ BOOSTED: ${upgradedItem.name} [${upgradedItem.elementalPrefix || 'ASTRAL'}] upgraded to ★ +${upgradedItem.stars} (${upgradedItem.finishTier} finish)!`,
@@ -1511,7 +1801,13 @@ class TacticsGame {
 
   async rollNewBattlefield() {
     const nextSeed = deriveSeed(this.baseSeed, Date.now());
-    this.tacticalHud.addLog(`Generating new battlefield seed 0x${nextSeed.toString(16)}...`, 'system');
+    const hexSeed = `0x${nextSeed.toString(16).toUpperCase()}`;
+    try {
+      window.history.replaceState(null, '', `?seed=${hexSeed}`);
+    } catch (e) {
+      // Sandbox guard
+    }
+    this.tacticalHud.addLog(`Generating new battlefield seed ${hexSeed}...`, 'system');
     await this.setupBattlefield(nextSeed);
     this.advanceTurn();
   }
@@ -1532,9 +1828,13 @@ class TacticsGame {
 
     let closestUnit = null;
     let minUnitDist = 36; // 36px threshold
+    const isReviveTargeting = this.currentMode === 'act' && (this.selectedAbility?.isRevive || this.selectedAbility?.targetsDead);
 
     for (const unit of this.units) {
-      if (unit.alive === false || (unit.hp !== undefined && unit.hp <= 0)) continue;
+      const isDead = unit.isDead || unit.alive === false || (unit.hp !== undefined && unit.hp <= 0);
+      if (isDead) {
+        if (!isReviveTargeting || unit.team !== this.activeUnit?.team) continue;
+      }
       const actorPos = this.stageUnitManager.getUnitScreenAnchor(unit.id, this.isometricBoard) || unit.group?.position;
       if (actorPos) {
         const proj = this.projectWorldToScreen(actorPos);
@@ -1578,14 +1878,16 @@ class TacticsGame {
       if (picked) {
         this.isometricBoard.setHoverTile(picked.x, picked.z);
 
-        // Find unit at tile
-        const unitAtTile = picked.unit || this.units.find(
-          (u) =>
-            u.alive !== false &&
-            (u.hp === undefined || u.hp > 0) &&
-            u.gridX === picked.x &&
-            u.gridZ === picked.z
-        );
+        // Find unit at tile (supporting Phoenix Revive targeting dead allies)
+        const isReviveMode = this.currentMode === 'act' && (this.selectedAbility?.isRevive || this.selectedAbility?.targetsDead);
+        const unitAtTile = picked.unit || this.units.find((u) => {
+          if (u.gridX !== picked.x || u.gridZ !== picked.z) return false;
+          const isDead = u.isDead || u.alive === false || (u.hp !== undefined && u.hp <= 0);
+          if (isReviveMode) {
+            return isDead ? (u.team === this.activeUnit?.team) : true;
+          }
+          return !isDead;
+        });
 
         if (unitAtTile) {
           if (this.currentMode === 'act' && this.selectedAbility) {
@@ -1620,13 +1922,15 @@ class TacticsGame {
       if (this.currentMode === 'move') {
         this.executeMove(picked);
       } else if (this.currentMode === 'act') {
-        const unitAtTile = picked.unit || this.units.find(
-          (u) =>
-            u.alive !== false &&
-            (u.hp === undefined || u.hp > 0) &&
-            u.gridX === picked.x &&
-            u.gridZ === picked.z
-        );
+        const isReviveMode = this.currentMode === 'act' && (this.selectedAbility?.isRevive || this.selectedAbility?.targetsDead);
+        const unitAtTile = picked.unit || this.units.find((u) => {
+          if (u.gridX !== picked.x || u.gridZ !== picked.z) return false;
+          const isDead = u.isDead || u.alive === false || (u.hp !== undefined && u.hp <= 0);
+          if (isReviveMode) {
+            return isDead ? (u.team === this.activeUnit?.team) : true;
+          }
+          return !isDead;
+        });
 
         if (unitAtTile) {
           const inRange = this.attackableTiles.some(

@@ -6,13 +6,61 @@
  * Salvaging (/api/salvage), and Clan Roster Inspector with Set.world Character Sheets.
  */
 
+/**
+ * Normalize an item to one of the 6 paperdoll slots:
+ * 'tool', 'offhand', 'head', 'chest', 'legs', 'finger'
+ */
+export function normalizeSlot(item) {
+  if (!item) return 'tool';
+  if (item.equippedSlot) {
+    const s = String(item.equippedSlot).toLowerCase();
+    if (['tool', 'offhand', 'head', 'chest', 'legs', 'finger'].includes(s)) return s;
+  }
+  const raw = String(item.slot || item.rawItem?.slot || item.type || '').toLowerCase();
+  const name = String(item.name || '').toLowerCase();
+
+  if (raw === 'tool' || raw === 'weapon') return 'tool';
+  if (raw === 'offhand' || raw === 'shield') return 'offhand';
+  if (raw === 'head' || raw === 'helm') return 'head';
+  if (raw === 'chest' || raw === 'armor') {
+    if (name.includes('shield') || name.includes('aegis') || name.includes('buckler')) return 'offhand';
+    if (name.includes('helm') || name.includes('visor') || name.includes('crown') || name.includes('hood')) return 'head';
+    if (name.includes('greaves') || name.includes('boots') || name.includes('leggings')) return 'legs';
+    return 'chest';
+  }
+  if (raw === 'legs' || raw === 'feet' || raw === 'boots') return 'legs';
+  if (raw === 'finger' || raw === 'ring' || raw === 'neck') return 'finger';
+
+  // Keyword fallbacks
+  if (name.includes('sword') || name.includes('bow') || name.includes('rod') || name.includes('dirk') || name.includes('blade') || name.includes('staff') || name.includes('scepter') || name.includes('spear') || name.includes('axe') || name.includes('dagger')) {
+    return 'tool';
+  }
+  if (name.includes('shield') || name.includes('aegis') || name.includes('buckler')) {
+    return 'offhand';
+  }
+  if (name.includes('helm') || name.includes('visor') || name.includes('crown') || name.includes('hood') || name.includes('hat') || name.includes('cap')) {
+    return 'head';
+  }
+  if (name.includes('cuirass') || name.includes('mail') || name.includes('armor') || name.includes('robe') || name.includes('vest') || name.includes('tunic') || name.includes('brigandine') || name.includes('garb') || name.includes('plate') || name.includes('chest')) {
+    return 'chest';
+  }
+  if (name.includes('greaves') || name.includes('boots') || name.includes('shoes') || name.includes('leggings') || name.includes('legs') || name.includes('trousers')) {
+    return 'legs';
+  }
+  if (name.includes('ring') || name.includes('band') || name.includes('neck') || name.includes('amulet') || name.includes('pendant') || name.includes('necklace') || name.includes('finger')) {
+    return 'finger';
+  }
+
+  return 'tool';
+}
+
 export class ForgeModal {
   /**
    * @param {HTMLElement} containerEl - Parent container or body to mount modal
    * @param {Object} callbacks
    * @param {(orbs: number) => any} [callbacks.onCraftItem]
    * @param {(itemIndex: number, orbsRefunded?: number) => void} [callbacks.onSalvageItem]
-   * @param {(itemIndex: number, unitId: string) => void} [callbacks.onEquipItem]
+   * @param {(itemIndex: number, unitId: string, slot?: string) => void} [callbacks.onEquipItem]
    * @param {(itemIndex: number) => void} [callbacks.onBoostItem]
    * @param {() => void} [callbacks.onClose]
    */
@@ -522,6 +570,7 @@ export class ForgeModal {
 
     this.state.inventory.forEach((item, index) => {
       const grade = (item.grade || 'B').toUpperCase();
+      const targetSlot = normalizeSlot(item);
       const salvageYield = Math.max(1, Math.round((item.orbValue || 25) * 0.1));
       const stars = item.boostStars || item.stars || 0;
       const starsLabel = stars > 0 ? `★ +${stars}` : '★ Base';
@@ -535,7 +584,7 @@ export class ForgeModal {
       card.innerHTML = `
         <div class="item-card-top">
           <div class="item-card-name">
-            <span>${item.type === 'armor' ? '🛡️' : '⚔️'}</span>
+            <span>${item.type === 'armor' || targetSlot === 'offhand' || targetSlot === 'chest' ? '🛡️' : '⚔️'}</span>
             <span>${item.name}</span>
             <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
             <span class="item-stars-badge">${starsLabel}</span>
@@ -544,6 +593,7 @@ export class ForgeModal {
         </div>
 
         <div class="item-card-meta-row">
+          <span class="slot-badge slot-${targetSlot}">[SLOT: ${targetSlot.toUpperCase()}]</span>
           <span class="elemental-prefix-badge prefix-${prefix.toLowerCase()}">[${prefix}]</span>
           <span class="finish-tier-badge finish-${finishTier.toLowerCase()}">${finishTier} Finish</span>
         </div>
@@ -554,7 +604,7 @@ export class ForgeModal {
 
         <div class="item-card-actions">
           <select class="equip-select" data-item-idx="${index}">
-            <option value="">-- Equip to Unit --</option>
+            <option value="">-- Equip [${targetSlot.toUpperCase()}] --</option>
             ${this.state.clanUnits
               .map(
                 (u) =>
@@ -608,34 +658,38 @@ export class ForgeModal {
     const item = this.state.inventory[itemIndex];
     if (!item) return;
 
-    // If equipping to a unit, clear previously equipped item of same type on that unit
+    const targetSlot = normalizeSlot(item);
+
+    // If equipping to a unit, clear previously equipped item of same slot on that unit
     if (unitId) {
       for (let i = 0; i < this.state.inventory.length; i++) {
         if (i !== itemIndex && this.state.inventory[i].equippedTo === unitId) {
-          if ((item.type === 'weapon' || item.slot === 'tool') &&
-              (this.state.inventory[i].type === 'weapon' || this.state.inventory[i].slot === 'tool')) {
+          const otherSlot = this.state.inventory[i].equippedSlot || normalizeSlot(this.state.inventory[i]);
+          if (otherSlot === targetSlot) {
             this.state.inventory[i].equippedTo = null;
-          } else if (item.type === 'armor' && this.state.inventory[i].type === 'armor') {
-            this.state.inventory[i].equippedTo = null;
+            this.state.inventory[i].equippedSlot = null;
           }
         }
       }
     }
 
     item.equippedTo = unitId || null;
+    item.equippedSlot = targetSlot;
 
     if (unitId) {
       const unit = this.state.clanUnits.find((u) => u.id === unitId);
       if (unit) {
-        if (item.type === 'armor') {
-          unit.equippedArmor = item.name;
-        } else {
+        unit.equipment = unit.equipment || {};
+        unit.equipment[targetSlot] = item;
+        if (targetSlot === 'tool') {
           unit.equippedTool = `${item.name} (✦ ${item.orbValue} Orbs)`;
+        } else if (targetSlot === 'chest') {
+          unit.equippedArmor = item.name;
         }
       }
     }
 
-    this.callbacks.onEquipItem?.(itemIndex, unitId);
+    this.callbacks.onEquipItem?.(itemIndex, unitId, targetSlot);
     this._renderActiveTab();
   }
 
@@ -675,22 +729,37 @@ export class ForgeModal {
         let slotGrade = grade;
         let meta = '';
 
+        const customItem = this.state.inventory.find(
+          (inv) => inv.equippedTo === unit.id && (inv.equippedSlot === slotKey || normalizeSlot(inv) === slotKey)
+        );
+
+        const actualItem = customItem || (typeof itemVal === 'object' && itemVal ? itemVal : null);
+        const isCustom = !!customItem || (actualItem && (actualItem.id?.startsWith('item-') || actualItem._custom || actualItem.equippedTo === unit.id));
+
         if (typeof itemVal === 'string') {
           name = itemVal;
-        } else if (itemVal && typeof itemVal === 'object') {
-          name = itemVal.name || defaultName;
-          slotGrade = (itemVal.tierGrade || itemVal.tier || itemVal.grade || slotGrade).toUpperCase();
-          meta = itemVal.statsBonus || (itemVal.score ? `Score ${Math.round(itemVal.score)}` : '') || itemVal.material || '';
+        }
+        if (actualItem) {
+          name = actualItem.name || defaultName;
+          slotGrade = (actualItem.tierGrade || actualItem.tier || actualItem.grade || slotGrade).toUpperCase();
+          meta = actualItem.statsBonus || (actualItem.score ? `Score ${Math.round(actualItem.score)}` : '') || actualItem.material || '';
         }
 
+        const stars = actualItem?.stars || actualItem?.boostStars || 0;
+        const starBadge = stars > 0 ? `<span class="slot-star-badge">★ +${stars}</span>` : '';
+        const tooltip = meta ? `${name} [${meta}]` : name;
+
         return `
-          <div class="paperdoll-slot">
+          <div class="paperdoll-slot ${isCustom ? 'custom-equipped' : ''}" title="${tooltip}">
             <div class="paperdoll-slot-header">
               <span class="slot-label">${defaultIcon} ${slotKey.toUpperCase()}</span>
-              <span class="grade-badge grade-${slotGrade.toLowerCase()}">${slotGrade}</span>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                ${starBadge}
+                <span class="grade-badge grade-${slotGrade.toLowerCase()}">${slotGrade}</span>
+              </div>
             </div>
             <div class="paperdoll-slot-name">${name}</div>
-            ${meta ? `<div class="paperdoll-slot-meta">${meta}</div>` : ''}
+            ${meta ? `<div class="paperdoll-slot-meta" title="${meta}">${meta}</div>` : ''}
           </div>
         `;
       };
