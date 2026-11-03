@@ -276,10 +276,82 @@ export class TurnManager {
     this.turnCount++;
     this.activeLaw = this._getLawForTurn(this.turnCount);
 
+    const channelEffects = [];
+
+    // 1. Process Herald passive (tactical_cadence):
+    // Grants +10 CT & +10 HP to self/adjacent allies on turn
+    const isHerald = (activeUnit.className === 'Herald' || activeUnit.passive?.id === 'tactical_cadence');
+    if (isHerald) {
+      activeUnit.hp = Math.min(activeUnit.maxHp || 100, (activeUnit.hp || 0) + 10);
+      const ux = activeUnit.gridX !== undefined ? activeUnit.gridX : (activeUnit.x ?? 0);
+      const uz = activeUnit.gridZ !== undefined ? activeUnit.gridZ : (activeUnit.z ?? 0);
+
+      for (const u of livingUnits) {
+        if (u === activeUnit || u.team !== activeUnit.team) continue;
+        const x = u.gridX !== undefined ? u.gridX : (u.x ?? 0);
+        const z = u.gridZ !== undefined ? u.gridZ : (u.z ?? 0);
+        if (Math.abs(ux - x) + Math.abs(uz - z) === 1) {
+          u.hp = Math.min(u.maxHp || 100, (u.hp || 0) + 10);
+          u.ct = Math.min(100, (u.ct || 0) + 10);
+        }
+      }
+    }
+
+    // 2. Process Nephrite Resonance regenPerTurn:
+    if (activeUnit.regenPerTurn && activeUnit.regenPerTurn > 0) {
+      activeUnit.hp = Math.min(activeUnit.maxHp || 100, (activeUnit.hp || 0) + activeUnit.regenPerTurn);
+    }
+
+    // 3. Process unit.channeling:
+    if (activeUnit.channeling && activeUnit.channeling.turnsLeft > 0) {
+      activeUnit.channeling.turnsLeft -= 1;
+      const ch = activeUnit.channeling;
+      const ux = activeUnit.gridX !== undefined ? activeUnit.gridX : (activeUnit.x ?? 0);
+      const uz = activeUnit.gridZ !== undefined ? activeUnit.gridZ : (activeUnit.z ?? 0);
+
+      if (ch.type === 'anthem') {
+        for (const u of livingUnits) {
+          if (u.team !== activeUnit.team) continue;
+          const x = u.gridX !== undefined ? u.gridX : (u.x ?? 0);
+          const z = u.gridZ !== undefined ? u.gridZ : (u.z ?? 0);
+          if (Math.abs(ux - x) + Math.abs(uz - z) <= 3) {
+            u.ct = Math.min(100, (u.ct || 0) + 15);
+            u.hp = Math.min(u.maxHp || 100, (u.hp || 0) + 10);
+          }
+        }
+        channelEffects.push({
+          unitId: activeUnit.id,
+          type: 'anthem',
+          turnsLeft: ch.turnsLeft,
+          description: 'Sovereign Anthem granted +15 CT & +10 HP to allies.'
+        });
+      } else if (ch.type === 'dance') {
+        for (const u of livingUnits) {
+          if (u.team === activeUnit.team) continue;
+          const x = u.gridX !== undefined ? u.gridX : (u.x ?? 0);
+          const z = u.gridZ !== undefined ? u.gridZ : (u.z ?? 0);
+          if (Math.abs(ux - x) + Math.abs(uz - z) <= 3) {
+            u.ct = Math.max(0, (u.ct || 0) - 10);
+          }
+        }
+        channelEffects.push({
+          unitId: activeUnit.id,
+          type: 'dance',
+          turnsLeft: ch.turnsLeft,
+          description: 'Mirage Spin Dance stripped 10 CT from enemies within 3 tiles.'
+        });
+      }
+
+      if (activeUnit.channeling.turnsLeft <= 0) {
+        activeUnit.channeling = null;
+      }
+    }
+
     return {
       activeUnit,
       ticksElapsed,
-      overflowCt: Math.max(0, (activeUnit.ct || 0) - this.ctThreshold)
+      overflowCt: Math.max(0, (activeUnit.ct || 0) - this.ctThreshold),
+      channelEffects
     };
   }
 
@@ -449,7 +521,7 @@ export class TurnManager {
       : (aiUnit.weapon?.abilities || []);
 
     const currentMp = aiUnit.mp ?? 40;
-    const availableAbilities = rawAbilities.filter((a) => (a.costMp || 0) <= currentMp);
+    const availableAbilities = rawAbilities.filter((a) => (a.mpCost ?? a.costMp ?? 0) <= currentMp);
 
     // If no abilities or out of MP, provide basic attack fallback
     if (availableAbilities.length === 0) {
@@ -477,7 +549,7 @@ export class TurnManager {
       };
 
       for (const ability of availableAbilities) {
-        const isSupport = !!ability.isSupport;
+        const isSupport = !!(ability.isSupport || ability.targetTeam === 'ally' || ability.id === 'bard_anthem');
         let candidateTargets;
         if (ability?.isRevive) {
           candidateTargets = allUnits.filter(
@@ -540,7 +612,11 @@ export class TurnManager {
             }
           } else {
             // Offensive evaluation
-            score = forecast.expectedDamage * 2.5;
+            if (ability?.isTalkSkill || ability?.id === 'talk_recruit') {
+              score = target.isBoss ? (forecast.expectedDamage * 2.5 + 150) : ((forecast.recruitChance || 50) * 4.5);
+            } else {
+              score = forecast.expectedDamage * 2.5;
+            }
 
             // Kill potential bonus
             const targetHp = target.hp ?? 100;

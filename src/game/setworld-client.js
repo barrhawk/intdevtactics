@@ -10,6 +10,39 @@
 // Canonical Set.world seed derivation: (seed + i * 0x9E3779B9) >>> 0
 export const deriveSeed = (seed, i) => ((seed >>> 0) + Math.imul(i, 0x9E3779B9)) >>> 0;
 
+export const EQUIPMENT_SLOTS = ['tool', 'offhand', 'head', 'chest', 'legs', 'feet', 'neck', 'finger'];
+
+export const SLOT_CATEGORIES = {
+  tool: ['Blade', 'Katana', 'Spear', 'Lance', 'Rifle', 'Musket', 'Bow', 'Tome', 'Harp', 'Broadsword'],
+  offhand: ['Aegis Buckler', 'Parrying Rondel', 'Arcane Crest', 'Tactical Quiver', 'Tower Shield'],
+  head: ['Knight Barbute', 'Circlet of Wisdom', 'Marksman Hood', 'Dragoon Visor', 'Iron Helm'],
+  chest: ['Dragon-Scale Cuirass', 'Robes of the Archmage', 'Padded Brigandine', 'Steel Breastplate', 'Tunic of the Wind'],
+  legs: ['Plate Leggings', 'Ranger Chausses', 'Silken Breeches', 'Iron Greaves', 'Trousers'],
+  feet: ['Boots of Celerity', 'Adamant Greaves', 'Iron Sabatons', 'Wind Striders'],
+  neck: ['Amulet of Warding', 'Talisman of Purity', 'Astral Pendant', 'Mythril Gorget', 'Periapt of Vitality'],
+  finger: ['Band of Might', 'Ring of Astral Celerity', 'Seal of the Azure King', 'Signet of Warding', 'Ring of Fortune']
+};
+
+export const SETWORLD_MATERIALS = ['mythril', 'adamantite', 'star-metal', 'nephrite', 'obsidian', 'titanium'];
+export const SETWORLD_PREFIXES = ['celestial', 'stormforged', 'void', 'ancient', 'runic', 'astral'];
+
+export const CLASS_PASSIVES = {
+  Dragoon: { id: 'skyborn_valor', name: 'Skyborn Valor', icon: '🐉', desc: '+25% DMG from high ground or Sky Leap' },
+  Samurai: { id: 'shirahadori', name: 'Shirahadori', icon: '⚔️', desc: '35% chance to parry & counter melee attacks' },
+  Fusilier: { id: 'rifled_overwatch', name: 'Rifled Overwatch', icon: '🔫', desc: '+15% Hit & pierces 30% DEF at range 3+' },
+  Archer: { id: 'eagle_eye', name: 'Eagle Eye', icon: '🏹', desc: '+15% Crit & +5% DMG per tile of distance' },
+  Mesmer: { id: 'illusory_veil', name: 'Illusory Veil', icon: '🎭', desc: '+15% Evade & drains 15 CT from attackers' },
+  Herald: { id: 'tactical_cadence', name: 'Tactical Cadence', icon: '🎺', desc: 'Grants +10 CT & +10 HP to self/adjacent allies on turn' },
+  Paladin: { id: 'aegis_ward', name: 'Aegis Ward', icon: '🛡️', desc: '-20% incoming DMG & immune to Cursed/Poison' },
+  Berserker: { id: 'blood_frenzy', name: 'Blood Frenzy', icon: '🩸', desc: '+35% ATK & +15% Crit when HP < 60%' },
+  'Land Reaver': { id: 'highland_crusher', name: 'Highland Crusher', icon: '⛰️', desc: '+25% DMG & 1-tile knockback from higher elevation' },
+  LandReaver: { id: 'highland_crusher', name: 'Highland Crusher', icon: '⛰️', desc: '+25% DMG & 1-tile knockback from higher elevation' },
+  Dreadnought: { id: 'juggernaut', name: 'Unstoppable Juggernaut', icon: '🗿', desc: 'Immune to Knockback, Stun & Freeze; +15% DEF' },
+  Scholar: { id: 'arcane_leyline', name: 'Arcane Leyline', icon: '📖', desc: '-30% MP costs & +20% Magic skill damage' },
+  Knight: { id: 'chivalric_honor', name: 'Chivalric Honor', icon: '🛡️', desc: '+15% DEF when adjacent to allies' },
+  'Black Mage': { id: 'elemental_mastery', name: 'Elemental Mastery', icon: '🔥', desc: '+20% Magic skill damage' }
+};
+
 // In-memory caches by seed
 export const charCache = new Map();
 export const itemCache = new Map();
@@ -96,28 +129,19 @@ function createSeededRng(seed) {
 /**
  * Deterministically generates a fallback Item matching Set.world's schema.
  */
-export function generateFallbackItem(seed) {
+export function generateFallbackItem(seed, explicitSlot = null) {
   const rng = createSeededRng(seed);
-  const prefixes = [
-    'ancient', 'hallowed', 'shadow', 'blazing', 'frozen',
-    'celestial', 'runic', 'titanium', 'refined', 'void',
-    'astral', 'stormforged', 'mythril', 'dread'
-  ];
-  const materials = [
-    'bronze', 'iron', 'steel', 'titanium', 'obsidian',
-    'nephrite', 'star-metal', 'mythril', 'adamantite'
-  ];
-  const slots = ['tool', 'tool', 'head', 'chest', 'legs', 'feet', 'offhand', 'neck', 'finger'];
-  const weaponTypes = ['blade', 'katana', 'spear', 'lance', 'rifle', 'musket', 'bow', 'tome', 'harp'];
+  const slot = explicitSlot || rng.choice(EQUIPMENT_SLOTS);
+  const mat = rng.choice(SETWORLD_MATERIALS);
+  const prefix = rng.choice(SETWORLD_PREFIXES);
 
-  const slot = rng.choice(slots);
-  const mat = rng.choice(materials);
-  const prefix = rng.choice(prefixes);
-  const baseName = slot === 'tool' ? rng.choice(weaponTypes) : `${slot} guard`;
-  const fullName = `${prefix} ${mat} ${baseName}`;
+  const slotOptions = SLOT_CATEGORIES[slot] || [`${slot} relic`];
+  const baseName = rng.choice(slotOptions);
+  const capPrefix = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  const capMat = mat.charAt(0).toUpperCase() + mat.slice(1);
+  const fullName = `${capPrefix} ${capMat} ${baseName}`;
 
   const grades = ['F', 'E', 'D', 'C', 'B', 'A', 'S'];
-  // Skew towards C and B with occasional A/S
   const roll = rng.next();
   let gradeIndex = 3; // C
   if (roll < 0.15) gradeIndex = 1; // E
@@ -132,16 +156,40 @@ export function generateFallbackItem(seed) {
   const orbSchedule = { S: 1562, A: 312, B: 62, C: 12, D: 2, E: 1, F: 1 };
   const orbVal = orbSchedule[grade] || 1;
 
-  return {
+  const item = {
     name: fullName,
     slot,
+    tier: grade,
+    grade,
     tierGrade: grade,
     score,
     orbValue: orbVal,
     seed: (seed >>> 0),
-    material: { name: mat, tierGrade: grade },
-    props: [{ name: prefix, tierGrade: grade }]
+    material: mat,
+    materialName: mat,
+    prefix,
+    props: [{ name: prefix, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: (seed >>> 0),
+      rollScore: score,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: mat,
+      prefix
+    }
   };
+
+  if (slot === 'feet') {
+    item.moveBonus = (gradeIndex >= 2) ? 1 : 0;
+    item.jumpBonus = (gradeIndex >= 4) ? 1 : 0;
+    item.stats = { speed: 4, dodge: 3 };
+  } else if (slot === 'neck') {
+    item.amuletWard = (grade === 'S' || grade === 'A');
+    item.stats = { magicDamage: 8, armor: 4, lck: 6, def: 4, mag: 8 };
+  }
+
+  return item;
 }
 
 /**
@@ -167,16 +215,17 @@ export function generateFallbackCharacter(seed) {
 
   // Weapons tailored to class for cohesive flavor
   let toolSeed = deriveSeed(seed, 101);
-  let toolItem = generateFallbackItem(toolSeed);
-  toolItem.slot = 'tool';
+  let toolItem = generateFallbackItem(toolSeed, 'tool');
 
   return {
     seed: (seed >>> 0),
     name: `${className} of the ${rng.choice(['Azure', 'Crimson', 'Obsidian', 'Solar', 'Verdant'])}`,
+    className,
     class: {
       name: className,
       description: `Tactical combatant skilled in ${className.toLowerCase()} combat arts.`
     },
+    passive: CLASS_PASSIVES[className] || CLASS_PASSIVES['Knight'],
     tierGrade: toolItem.tierGrade || 'C',
     powerRating,
     powerRatingMax: 1808,
@@ -192,11 +241,20 @@ export function generateFallbackCharacter(seed) {
     },
     equipment: {
       tool: toolItem,
-      chest: generateFallbackItem(deriveSeed(seed, 102)),
-      head: generateFallbackItem(deriveSeed(seed, 103)),
-      legs: generateFallbackItem(deriveSeed(seed, 104)),
-      feet: generateFallbackItem(deriveSeed(seed, 105)),
-      offhand: generateFallbackItem(deriveSeed(seed, 106))
+      offhand: generateFallbackItem(deriveSeed(seed, 102), 'offhand'),
+      head: generateFallbackItem(deriveSeed(seed, 103), 'head'),
+      chest: generateFallbackItem(deriveSeed(seed, 104), 'chest'),
+      legs: generateFallbackItem(deriveSeed(seed, 105), 'legs'),
+      feet: generateFallbackItem(deriveSeed(seed, 106), 'feet'),
+      neck: generateFallbackItem(deriveSeed(seed, 107), 'neck'),
+      finger: generateFallbackItem(deriveSeed(seed, 108), 'finger')
+    },
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: (seed >>> 0),
+      className,
+      rolledAt: Date.now(),
+      slotCount: 8
     },
     contentVersion: 'setworld-anima-v1'
   };
@@ -221,6 +279,16 @@ export function generateFallbackCraft(orbs, seed) {
     }
   }
 
+  bestItem.provenance = {
+    endpoint: '/api/craft',
+    seed: (seed >>> 0),
+    rollScore: highestScore,
+    candidateRank: 1,
+    totalCandidates: rolls,
+    material: typeof bestItem.material === 'string' ? bestItem.material : bestItem.material?.name,
+    prefix: bestItem.prefix
+  };
+
   return {
     mode: 'orbs',
     orbs: safeOrbs,
@@ -229,6 +297,13 @@ export function generateFallbackCraft(orbs, seed) {
     item: bestItem,
     contentVersion: 'setworld-anima-v1'
   };
+}
+
+/**
+ * High-level craftWithOrb generator matching Set.world API and candidate lottery.
+ */
+export async function craftWithOrb(orbs, seed) {
+  return craftItem(orbs, seed);
 }
 
 /**
@@ -983,14 +1058,18 @@ function getTileElevation(board, x, z) {
 }
 
 /**
- * Generates a full 6-slot Set.world equipment paperdoll
- * (tool, offhand, head, chest, legs, finger) with readable names and stats.
+ * Generates a full 8-slot Set.world equipment paperdoll
+ * (tool, offhand, head, chest, legs, feet, neck, finger) with readable names and stats.
  */
-export function generateFullEquipment(unitSeed, charClass, weaponSpec, grade = 'C') {
+export function generateFullEquipment(unitSeed, charClass, weaponSpec = null, grade = 'C') {
   const rng = createSeededRng(unitSeed);
+  const wSpec = weaponSpec || { weaponType: 'sword' };
 
-  const wepPrefix = weaponSpec.elementalPrefix || 'Mythril';
-  const wepName = weaponSpec.name || (weaponSpec.weaponType.charAt(0).toUpperCase() + weaponSpec.weaponType.slice(1));
+  const wepPrefix = wSpec.elementalPrefix || 'Mythril';
+  const wepName = wSpec.name || ((wSpec.weaponType || 'sword').charAt(0).toUpperCase() + (wSpec.weaponType || 'sword').slice(1));
+  const toolMat = rng.choice(SETWORLD_MATERIALS);
+  const toolPref = rng.choice(SETWORLD_PREFIXES);
+
   const toolItem = {
     name: `${wepPrefix} ${wepName}`,
     slot: 'tool',
@@ -1001,67 +1080,205 @@ export function generateFullEquipment(unitSeed, charClass, weaponSpec, grade = '
     boostStars: 0,
     boostMult: 1.0,
     orbValue: 125,
+    material: toolMat,
+    materialName: toolMat,
+    prefix: toolPref,
+    props: [{ name: toolPref, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 101),
+      rollScore: 85.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: toolMat,
+      prefix: toolPref
+    },
     stats: { physicalDamage: 22, magicDamage: 18 }
   };
 
-  const offhandNames = ['Aegis Buckler', 'Parrying Rondel', 'Arcane Crest', 'Tactical Quiver', 'Runed Aegis'];
-  const headNames = ['Knight Barbute', 'Circlet of Wisdom', 'Marksman Hood', 'Dragoon Visor', 'Iron Helm'];
-  const chestNames = ['Dragon-Scale Cuirass', 'Robes of the Archmage', 'Padded Brigandine', 'Steel Breastplate', 'Tunic of the Wind'];
-  const legsNames = ['Greaves of Swiftness', 'Plate Leggings', 'Ranger Chausses', 'Silken Breeches', 'Iron Sabatons'];
-  const fingerNames = ['Band of Might', 'Ring of Astral Celerity', 'Seal of the Azure King', 'Signet of Warding', 'Ring of Fortune'];
-
+  const offhandMat = rng.choice(SETWORLD_MATERIALS);
+  const offhandPref = rng.choice(SETWORLD_PREFIXES);
   const offhand = {
-    name: rng.choice(offhandNames),
+    name: rng.choice(SLOT_CATEGORIES.offhand),
     slot: 'offhand',
     tier: grade,
     grade: grade,
     tierGrade: grade,
     finishTier: 'bronze',
     orbValue: 65,
+    material: offhandMat,
+    materialName: offhandMat,
+    prefix: offhandPref,
+    props: [{ name: offhandPref, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 102),
+      rollScore: 75.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: offhandMat,
+      prefix: offhandPref
+    },
     stats: { armor: 6, dodge: 4 }
   };
 
+  const headMat = rng.choice(SETWORLD_MATERIALS);
+  const headPref = rng.choice(SETWORLD_PREFIXES);
   const head = {
-    name: rng.choice(headNames),
+    name: rng.choice(SLOT_CATEGORIES.head),
     slot: 'head',
     tier: grade,
     grade: grade,
     tierGrade: grade,
     finishTier: 'bronze',
     orbValue: 50,
+    material: headMat,
+    materialName: headMat,
+    prefix: headPref,
+    props: [{ name: headPref, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 103),
+      rollScore: 70.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: headMat,
+      prefix: headPref
+    },
     stats: { armor: 4, accuracy: 5 }
   };
 
+  const chestMat = rng.choice(SETWORLD_MATERIALS);
+  const chestPref = rng.choice(SETWORLD_PREFIXES);
   const chest = {
-    name: rng.choice(chestNames),
+    name: rng.choice(SLOT_CATEGORIES.chest),
     slot: 'chest',
     tier: grade,
     grade: grade,
     tierGrade: grade,
     finishTier: 'bronze',
     orbValue: 90,
+    material: chestMat,
+    materialName: chestMat,
+    prefix: chestPref,
+    props: [{ name: chestPref, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 104),
+      rollScore: 88.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: chestMat,
+      prefix: chestPref
+    },
     stats: { armor: 10, maxHpBonus: 25 }
   };
 
+  const legsMat = rng.choice(SETWORLD_MATERIALS);
+  const legsPref = rng.choice(SETWORLD_PREFIXES);
   const legs = {
-    name: rng.choice(legsNames),
+    name: rng.choice(SLOT_CATEGORIES.legs),
     slot: 'legs',
     tier: grade,
     grade: grade,
     tierGrade: grade,
     finishTier: 'bronze',
     orbValue: 55,
+    material: legsMat,
+    materialName: legsMat,
+    prefix: legsPref,
+    props: [{ name: legsPref, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 105),
+      rollScore: 72.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: legsMat,
+      prefix: legsPref
+    },
     stats: { armor: 5, walkSpeedBonus: 0.1 }
   };
 
+  const feetMat = rng.choice(SETWORLD_MATERIALS);
+  const feetPref = rng.choice(SETWORLD_PREFIXES);
+  const gradeUpper = (grade || 'C').toUpperCase();
+  const feet = {
+    name: rng.choice(SLOT_CATEGORIES.feet),
+    slot: 'feet',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 60,
+    material: feetMat,
+    materialName: feetMat,
+    prefix: feetPref,
+    props: [{ name: feetPref, tierGrade: grade }],
+    moveBonus: ['D', 'C', 'B', 'A', 'S'].includes(gradeUpper) ? 1 : 0,
+    jumpBonus: ['B', 'A', 'S'].includes(gradeUpper) ? 1 : 0,
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 106),
+      rollScore: 74.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: feetMat,
+      prefix: feetPref
+    },
+    stats: { speed: 4, dodge: 3 }
+  };
+
+  const neckMat = rng.choice(SETWORLD_MATERIALS);
+  const neckPref = rng.choice(SETWORLD_PREFIXES);
+  const neck = {
+    name: rng.choice(SLOT_CATEGORIES.neck),
+    slot: 'neck',
+    tier: grade,
+    grade: grade,
+    tierGrade: grade,
+    finishTier: 'bronze',
+    orbValue: 85,
+    material: neckMat,
+    materialName: neckMat,
+    prefix: neckPref,
+    props: [{ name: neckPref, tierGrade: grade }],
+    amuletWard: (gradeUpper === 'S' || gradeUpper === 'A'),
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 107),
+      rollScore: 82.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: neckMat,
+      prefix: neckPref
+    },
+    stats: { magicDamage: 8, armor: 4, lck: 6, def: 4, mag: 8 }
+  };
+
+  const fingerMat = rng.choice(SETWORLD_MATERIALS);
+  const fingerPref = rng.choice(SETWORLD_PREFIXES);
   const finger = {
-    name: rng.choice(fingerNames),
+    name: rng.choice(SLOT_CATEGORIES.finger),
     slot: 'finger',
     tier: grade,
     grade: grade,
     tierGrade: grade,
     finishTier: 'bronze',
     orbValue: 75,
+    material: fingerMat,
+    materialName: fingerMat,
+    prefix: fingerPref,
+    props: [{ name: fingerPref, tierGrade: grade }],
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: deriveSeed(unitSeed, 108),
+      rollScore: 80.0,
+      candidateRank: 1,
+      totalCandidates: 1,
+      material: fingerMat,
+      prefix: fingerPref
+    },
     stats: { critBonus: 5, magicDamage: 6 }
   };
 
@@ -1071,8 +1288,183 @@ export function generateFullEquipment(unitSeed, charClass, weaponSpec, grade = '
     head,
     chest,
     legs,
+    feet,
+    neck,
     finger
   };
+}
+
+/**
+ * Normalizes an equipment object ensuring all 8 slots are populated.
+ * Synthesizes starter feet & neck items deterministically if absent.
+ */
+export function normalizeEquipment(equipment = {}, unitSeed = 1337, charClass = 'Knight', weaponSpec = null, grade = 'C') {
+  let targetEq = equipment;
+  let unit = null;
+  if (equipment && equipment.equipment && typeof equipment.equipment === 'object') {
+    unit = equipment;
+    targetEq = equipment.equipment;
+  }
+
+  const norm = { ...(targetEq || {}) };
+  const fullDefaults = generateFullEquipment(unitSeed, charClass, weaponSpec, grade);
+
+  for (let idx = 0; idx < EQUIPMENT_SLOTS.length; idx++) {
+    const slot = EQUIPMENT_SLOTS[idx];
+    if (!norm[slot]) {
+      norm[slot] = fullDefaults[slot] || generateFallbackItem(deriveSeed(unitSeed, idx + 200), slot);
+    } else {
+      const item = { ...norm[slot] };
+      item.slot = slot;
+      if (!item.material) {
+        const matRng = createSeededRng(deriveSeed(unitSeed, idx + 300));
+        item.material = matRng.choice(SETWORLD_MATERIALS);
+      }
+      if (!item.prefix) {
+        const prefRng = createSeededRng(deriveSeed(unitSeed, idx + 400));
+        item.prefix = prefRng.choice(SETWORLD_PREFIXES);
+      }
+      if (!item.provenance) {
+        item.provenance = {
+          endpoint: '/api/roll/character',
+          seed: deriveSeed(unitSeed, idx + 500),
+          rollScore: item.score || 80.0,
+          candidateRank: 1,
+          totalCandidates: 1,
+          material: typeof item.material === 'string' ? item.material : item.material?.name,
+          prefix: item.prefix
+        };
+      }
+      norm[slot] = item;
+    }
+  }
+
+  if (unit) {
+    unit.equipment = norm;
+    recalculateEquipmentStats(unit);
+    return norm;
+  }
+  return norm;
+}
+
+/**
+ * Computes active Set.world Material & Prefix Resonances (Item Set Bonuses).
+ */
+export function computeSetWorldResonance(unit) {
+  if (!unit || !unit.equipment) {
+    if (unit) unit.resonances = [];
+    return [];
+  }
+
+  const materialCounts = {};
+  const prefixCounts = {};
+
+  for (const slot of EQUIPMENT_SLOTS) {
+    const item = unit.equipment[slot];
+    if (!item) continue;
+
+    let mat = '';
+    if (typeof item.material === 'string') {
+      mat = item.material;
+    } else if (item.material && typeof item.material === 'object') {
+      mat = item.material.name || item.material.id || '';
+    } else if (item.provenance?.material) {
+      mat = item.provenance.material;
+    }
+    mat = mat.toLowerCase().trim();
+    if (mat) {
+      materialCounts[mat] = (materialCounts[mat] || 0) + 1;
+    }
+
+    let pref = '';
+    if (typeof item.prefix === 'string') {
+      pref = item.prefix;
+    } else if (item.prefix && typeof item.prefix === 'object') {
+      pref = item.prefix.name || item.prefix.id || '';
+    } else if (Array.isArray(item.props) && item.props[0]?.name) {
+      pref = item.props[0].name;
+    } else if (item.provenance?.prefix) {
+      pref = item.provenance.prefix;
+    }
+    pref = pref.toLowerCase().trim();
+    if (pref) {
+      prefixCounts[pref] = (prefixCounts[pref] || 0) + 1;
+    }
+  }
+
+  const resonances = [];
+
+  const MATERIAL_RESONANCE_DEFS = {
+    mythril: {
+      id: 'mythril',
+      name: 'Mythril Resonance',
+      desc: '+15 DEF, +10 SPD, Auto-Float',
+      stats: { def: 15, spd: 10 },
+      autoFloat: true
+    },
+    'star-metal': {
+      id: 'star-metal',
+      name: 'Star-Metal Resonance',
+      desc: '+18 ATK, +18 MAG, +15% Crit',
+      stats: { atk: 18, mag: 18 },
+      critBonus: 15
+    },
+    adamantite: {
+      id: 'adamantite',
+      name: 'Adamantite Resonance',
+      desc: '+60 Max HP, +25 DEF, Unmovable',
+      stats: { def: 25 },
+      hpBonus: 60,
+      knockbackImmune: true
+    },
+    obsidian: {
+      id: 'obsidian',
+      name: 'Obsidian Resonance',
+      desc: '+22 ATK, 20% Lifesteal',
+      stats: { atk: 22 },
+      lifesteal: 0.20
+    },
+    nephrite: {
+      id: 'nephrite',
+      name: 'Nephrite Resonance',
+      desc: '+20 MAG, +12 HP Regen/Turn',
+      stats: { mag: 20 },
+      regenPerTurn: 12
+    },
+    titanium: {
+      id: 'titanium',
+      name: 'Titanium Resonance',
+      desc: '+15 ATK, +15 DEF, +1 MOVE',
+      stats: { atk: 15, def: 15 },
+      moveBonus: 1
+    }
+  };
+
+  for (const [mat, count] of Object.entries(materialCounts)) {
+    if (count >= 2 && MATERIAL_RESONANCE_DEFS[mat]) {
+      const def = MATERIAL_RESONANCE_DEFS[mat];
+      resonances.push({
+        ...def,
+        count
+      });
+    }
+  }
+
+  for (const [pref, count] of Object.entries(prefixCounts)) {
+    if (count >= 2) {
+      const capName = pref.charAt(0).toUpperCase() + pref.slice(1);
+      resonances.push({
+        id: pref,
+        name: `${capName} Prefix Synergy`,
+        count,
+        desc: '+10 All Stats',
+        stats: { atk: 10, def: 10, mag: 10, spd: 10, lck: 10 }
+      });
+    }
+  }
+
+  unit.resonances = resonances;
+  return resonances;
 }
 
 /**
@@ -1086,17 +1478,22 @@ export function recalculateEquipmentStats(unit) {
   const prevMaxMp = unit.maxMp || 40;
   const wasFullHp = unit.hp === undefined || unit.hp >= prevMaxHp;
   const wasFullMp = unit.mp === undefined || unit.mp >= prevMaxMp;
+
   if (unit._baseMaxHp === undefined) unit._baseMaxHp = unit.maxHp || 100;
   if (unit._baseMaxMp === undefined) unit._baseMaxMp = unit.maxMp || 40;
-  if (unit._baseMoveRange === undefined) unit._baseMoveRange = unit.moveRange || 3;
+  if (unit._baseMove === undefined) unit._baseMove = unit.move ?? 4;
+  if (unit._baseJump === undefined) unit._baseJump = unit.jump ?? 2;
+  if (unit._baseMoveRange === undefined) unit._baseMoveRange = unit.moveRange ?? unit._baseMove;
   if (unit._baseSpeed === undefined) unit._baseSpeed = unit.speed || 15;
   if (!unit._baseStats) unit._baseStats = { ...(unit.stats || {}) };
 
   // Reset to base stats
   unit.maxHp = unit._baseMaxHp;
   unit.maxMp = unit._baseMaxMp;
+  unit.move = unit._baseMove;
   unit.moveRange = unit._baseMoveRange;
-  unit.move = unit._baseMoveRange;
+  unit.jump = unit._baseJump;
+  unit.jumpHeight = unit._baseJump;
   unit.speed = unit._baseSpeed;
   unit.stats = { ...unit._baseStats };
   unit.armor = unit._baseStats.armor || 0;
@@ -1105,59 +1502,174 @@ export function recalculateEquipmentStats(unit) {
   unit.magicDamage = unit._baseStats.magicDamage || 0;
   unit.dodge = unit._baseStats.dodge || 0;
 
-  if (!unit.equipment) return;
+  unit.amuletWard = false;
+  unit.knockbackImmune = false;
+  unit.lifesteal = 0;
+  unit.regenPerTurn = 0;
+  unit.critBonus = 0;
 
-  const slots = ['tool', 'offhand', 'head', 'chest', 'legs', 'finger'];
-  for (const s of slots) {
-    const eqItem = unit.equipment[s];
-    if (!eqItem) continue;
+  if (unit.equipment) {
+    for (const s of EQUIPMENT_SLOTS) {
+      const eqItem = unit.equipment[s];
+      if (!eqItem) continue;
 
-    if (s === 'tool') {
-      const raw = eqItem.rawItem || eqItem;
-      const spec = mapToolToWeaponSpec(raw, unit.className || unit.class || unit.job);
-      unit.weapon = spec;
-      unit.weaponType = spec.weaponType;
-      unit.heldModelName = spec.heldModelName;
-      unit.abilities = spec.abilities;
-      unit.attackRange = spec.attackRange;
-      unit.finishTier = eqItem.finishTier || unit.finishTier;
-      unit.stars = (eqItem.stars !== undefined ? eqItem.stars : eqItem.boostStars) ?? unit.stars;
-      unit.elementalPrefix = eqItem.elementalPrefix || unit.elementalPrefix;
-    } else {
-      const tierMult = { F: 1, E: 2, D: 3, C: 4, B: 6, A: 9, S: 14 }[eqItem.grade || eqItem.tier || 'B'] || 5;
-      const starBonus = ((eqItem.stars !== undefined ? eqItem.stars : eqItem.boostStars) || 0) * 3;
-      const bonus = tierMult + starBonus;
+      if (s === 'tool') {
+        const raw = eqItem.rawItem || eqItem;
+        const spec = mapToolToWeaponSpec(raw, unit.className || unit.class || unit.job);
+        if (unit.isRaidBoss || (unit.weapon?.abilities?.some((a) => a.id === 'sovereign_cataclysm')) || eqItem.abilities?.some((a) => a.id === 'sovereign_cataclysm')) {
+          if (!spec.abilities.some((a) => a.id === 'sovereign_cataclysm')) {
+            spec.abilities.unshift({
+              id: 'sovereign_cataclysm',
+              name: 'Sovereign Cataclysm',
+              range: { min: 1, max: 3 },
+              anim: 'Katana Use',
+              animPrefix: 'Katana Use',
+              powerMult: 1.65,
+              statusProc: 'frozen',
+              costMp: 10,
+              aoe: 1,
+              desc: 'Unleashes devastating sovereign apocalyptic cold, freezing all in its path.'
+            });
+          }
+        }
+        unit.weapon = spec;
+        unit.weaponType = spec.weaponType;
+        unit.heldModelName = spec.heldModelName;
+        unit.abilities = spec.abilities;
+        unit.attackRange = spec.attackRange;
+        unit.finishTier = eqItem.finishTier || unit.finishTier;
+        unit.stars = (eqItem.stars !== undefined ? eqItem.stars : eqItem.boostStars) ?? unit.stars;
+        unit.elementalPrefix = eqItem.elementalPrefix || unit.elementalPrefix;
+      } else {
+        const gradeKey = (eqItem.grade || eqItem.tier || eqItem.tierGrade || 'B').toUpperCase();
+        const tierMult = { F: 1, E: 2, D: 3, C: 4, B: 6, A: 9, S: 14 }[gradeKey] || 5;
+        const starBonus = ((eqItem.stars !== undefined ? eqItem.stars : eqItem.boostStars) || 0) * 3;
+        const bonus = tierMult + starBonus;
+        const rarity = String(eqItem.rarity || eqItem.tier || eqItem.grade || '').toLowerCase();
 
-      if (s === 'head') {
-        unit.maxHp += bonus * 3;
-        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 3;
-        unit.magicResistance += bonus;
-        unit.stats.magicResistance = (unit.stats.magicResistance || 0) + bonus;
-      } else if (s === 'chest') {
-        unit.maxHp += bonus * 5;
-        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 5;
-        unit.armor += bonus * 2;
-        unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
-      } else if (s === 'legs') {
-        const moveBonus = Math.min(2, Math.ceil(bonus / 5));
-        unit.moveRange += moveBonus;
-        unit.move = unit.moveRange;
-        unit.speed += bonus;
-        unit.dodge += bonus;
-        unit.stats.moveRange = unit.moveRange;
-        unit.stats.speed = (unit.stats.speed || 15) + bonus;
-        unit.stats.dodge = (unit.stats.dodge || 0) + bonus;
-      } else if (s === 'offhand') {
-        unit.armor += bonus * 2;
-        unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
-        unit.blockChance += bonus;
-        unit.stats.blockChance = (unit.stats.blockChance || 0) + bonus;
-      } else if (s === 'finger') {
-        unit.magicDamage += bonus * 2;
-        unit.stats.magicDamage = (unit.stats.magicDamage || 0) + bonus * 2;
-        unit.speed += bonus;
-        unit.stats.speed = (unit.stats.speed || 15) + bonus;
+        if (s === 'head') {
+          unit.maxHp += bonus * 3;
+          if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 3;
+          unit.magicResistance += bonus;
+          unit.stats.magicResistance = (unit.stats.magicResistance || 0) + bonus;
+        } else if (s === 'chest') {
+          unit.maxHp += bonus * 5;
+          if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += bonus * 5;
+          unit.armor += bonus * 2;
+          unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
+        } else if (s === 'legs') {
+          const moveBonus = Math.min(2, Math.ceil(bonus / 5));
+          unit.moveRange += moveBonus;
+          unit.move += moveBonus;
+          unit.speed += bonus;
+          unit.dodge += bonus;
+          unit.stats.moveRange = unit.moveRange;
+          unit.stats.speed = (unit.stats.speed || 15) + bonus;
+          unit.stats.dodge = (unit.stats.dodge || 0) + bonus;
+        } else if (s === 'offhand') {
+          unit.armor += bonus * 2;
+          unit.stats.armor = (unit.stats.armor || 0) + bonus * 2;
+          unit.blockChance += bonus;
+          unit.stats.blockChance = (unit.stats.blockChance || 0) + bonus;
+        } else if (s === 'finger') {
+          unit.magicDamage += bonus * 2;
+          unit.stats.magicDamage = (unit.stats.magicDamage || 0) + bonus * 2;
+          unit.speed += bonus;
+          unit.stats.speed = (unit.stats.speed || 15) + bonus;
+        } else if (s === 'feet') {
+          unit.speed += bonus;
+          unit.stats.speed = (unit.stats.speed || 15) + bonus;
+          unit.dodge += Math.round(bonus / 2);
+          unit.stats.dodge = (unit.stats.dodge || 0) + Math.round(bonus / 2);
+
+          const isUncommonPlus = ['uncommon', 'rare', 'epic', 'legendary', 'mythic'].includes(rarity) || ['E', 'D', 'C', 'B', 'A', 'S'].includes(gradeKey);
+          if (isUncommonPlus || eqItem.moveBonus) {
+            unit.move += 1;
+            unit.moveRange += 1;
+          }
+          const isEpicPlus = ['epic', 'legendary', 'mythic'].includes(rarity) || ['B', 'A', 'S'].includes(gradeKey);
+          if (isEpicPlus || eqItem.jumpBonus) {
+            unit.jump += 1;
+            unit.jumpHeight += 1;
+          }
+        } else if (s === 'neck') {
+          unit.magicDamage += bonus * 2;
+          unit.stats.magicDamage = (unit.stats.magicDamage || 0) + bonus * 2;
+          unit.armor += bonus;
+          unit.stats.armor = (unit.stats.armor || 0) + bonus;
+          unit.stats.lck = (unit.stats.lck || 10) + bonus;
+
+          const isWardRarity = ['legendary', 'mythic'].includes(rarity) || ['A', 'S'].includes(gradeKey) || eqItem.amuletWard;
+          if (isWardRarity) {
+            unit.amuletWard = true;
+          }
+        }
       }
+    }
+  }
+
+  // Set.world Material & Prefix Resonance Bonuses
+  computeSetWorldResonance(unit);
+
+  if (unit.resonances && unit.resonances.length > 0) {
+    for (const res of unit.resonances) {
+      if (res.stats) {
+        if (res.stats.def) {
+          unit.armor += res.stats.def;
+          unit.stats.armor = (unit.stats.armor || 0) + res.stats.def;
+        }
+        if (res.stats.spd) {
+          unit.speed += res.stats.spd;
+          unit.stats.speed = (unit.stats.speed || 15) + res.stats.spd;
+        }
+        if (res.stats.atk) {
+          unit.stats.physicalDamage = (unit.stats.physicalDamage || 0) + res.stats.atk;
+        }
+        if (res.stats.mag) {
+          unit.magicDamage += res.stats.mag;
+          unit.stats.magicDamage = (unit.stats.magicDamage || 0) + res.stats.mag;
+        }
+        if (res.stats.lck) {
+          unit.stats.lck = (unit.stats.lck || 10) + res.stats.lck;
+          unit.dodge = (unit.dodge || 0) + 5;
+          unit.stats.dodge = (unit.stats.dodge || 0) + 5;
+        }
+      }
+      if (res.autoFloat) {
+        unit.isFloating = true;
+        unit.status = unit.status || 'floating';
+      }
+      if (res.critBonus) {
+        unit.critBonus = (unit.critBonus || 0) + res.critBonus;
+      }
+      if (res.hpBonus) {
+        unit.maxHp += res.hpBonus;
+        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += res.hpBonus;
+      }
+      if (res.knockbackImmune) {
+        unit.knockbackImmune = true;
+      }
+      if (res.lifesteal) {
+        unit.lifesteal = (unit.lifesteal || 0) + res.lifesteal;
+      }
+      if (res.regenPerTurn) {
+        unit.regenPerTurn = (unit.regenPerTurn || 0) + res.regenPerTurn;
+      }
+      if (res.moveBonus) {
+        unit.move += res.moveBonus;
+        unit.moveRange += res.moveBonus;
+      }
+    }
+  }
+
+  // Class Passive traits
+  const passive = unit.passive || CLASS_PASSIVES[unit.className];
+  if (passive) {
+    if (passive.id === 'juggernaut' || unit.className === 'Dreadnought') {
+      unit.knockbackImmune = true;
+    }
+    if (passive.id === 'aegis_ward' || unit.className === 'Paladin') {
+      unit.amuletWard = true;
     }
   }
 
@@ -1166,25 +1678,119 @@ export function recalculateEquipmentStats(unit) {
 }
 
 /**
- * Applies a Set.world equipment item to a unit's 6-slot paperdoll
- * (tool, offhand, head, chest, legs, finger) and applies stat bonuses.
+ * Applies a Set.world equipment item to a unit's 8-slot paperdoll
+ * (tool, offhand, head, chest, legs, feet, neck, finger) and applies stat bonuses.
+ * Supports both applyEquipmentToUnit(unit, item, slot) and applyEquipmentToUnit(unit, slot, item).
  */
-export function applyEquipmentToUnit(unit, item, targetSlot = null) {
-  if (!unit || !item) return { slot: targetSlot || null, unit };
+export function applyEquipmentToUnit(unit, arg2, arg3 = null) {
+  if (!unit) return { slot: null, unit };
+
+  let item = null;
+  let targetSlot = null;
+
+  if (typeof arg2 === 'string') {
+    targetSlot = arg2;
+    item = arg3;
+  } else {
+    item = arg2;
+    targetSlot = arg3;
+  }
+
+  if (!item) return { slot: targetSlot || null, unit };
 
   let slot = targetSlot || item.slot || (item.type === 'armor' ? 'chest' : 'tool');
-  const sLower = String(slot).toLowerCase();
-  if (sLower === 'weapon') slot = 'tool';
-  else if (sLower === 'shield') slot = 'offhand';
-  else if (sLower === 'armor') slot = 'chest';
-  else if (sLower === 'ring' || sLower === 'neck') slot = 'finger';
-  else if (sLower === 'feet' || sLower === 'boots') slot = 'legs';
+  let sLower = String(slot).toLowerCase();
+  if (sLower === 'weapon') sLower = 'tool';
+  else if (sLower === 'shield') sLower = 'offhand';
+  else if (sLower === 'armor') sLower = 'chest';
+  else if (sLower === 'boots') sLower = 'feet';
+  else if (sLower === 'ring') sLower = 'finger';
+  else if (sLower === 'amulet' || sLower === 'pendant' || sLower === 'talisman' || sLower === 'periapt' || sLower === 'gorget') sLower = 'neck';
+  else if (sLower === 'helm' || sLower === 'circlet' || sLower === 'visor') sLower = 'head';
+
+  if (!EQUIPMENT_SLOTS.includes(sLower)) {
+    sLower = 'tool';
+  }
 
   unit.equipment = unit.equipment || {};
-  unit.equipment[slot] = item;
+  unit.equipment[sLower] = item;
   recalculateEquipmentStats(unit);
 
-  return { slot, unit };
+  return { slot: sLower, unit };
+}
+
+/**
+ * Deterministically re-rolls a single Clan unit from a seed string,
+ * preserving id, team, grid coordinates, and facing while normalizing 8-slot gear and resonances.
+ */
+function stringToSeed(str) {
+  if (typeof str === 'number') return str >>> 0;
+  if (!str) return 0x1337;
+  let hash = 5381;
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) + hash) + s.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash >>> 0;
+}
+
+export function rerollSingleUnitWithSeed(unit, customSeedStr) {
+  if (!unit) return null;
+  const seed = stringToSeed(customSeedStr);
+  const charData = generateFallbackCharacter(seed);
+  const className = charData.class?.name || 'Knight';
+
+  unit.seed = seed;
+  unit.name = charData.name;
+  unit.className = className;
+  unit.class = className;
+  unit.job = className;
+  unit.grade = charData.tierGrade || 'C';
+  unit.tier = unit.grade;
+  unit.tierGrade = unit.grade;
+  unit.finishTier = 'bronze';
+  unit.boostStars = 0;
+
+  const weaponSpec = mapToolToWeaponSpec(charData.equipment?.tool, className);
+  unit.weapon = weaponSpec;
+  unit.weaponType = weaponSpec.weaponType;
+  unit.weaponModel = weaponSpec.heldModelName;
+  unit.heldModelName = weaponSpec.heldModelName;
+  unit.abilities = weaponSpec.abilities;
+  unit.attackRange = weaponSpec.attackRange;
+
+  unit.passive = CLASS_PASSIVES[className] || CLASS_PASSIVES['Knight'];
+
+  const baseHp = Math.round(charData.attributes?.maxHealth || 100);
+  const speed = Math.round((charData.attributes?.walkSpeed || 1.0) * 10) + (unit.isBoss ? 7 : 6);
+  const moveRange = 3 + ((charData.attributes?.walkSpeed || 1.0) > 1.25 ? 1 : 0);
+  unit._baseMaxHp = baseHp;
+  unit._baseMaxMp = 40;
+  unit._baseMoveRange = moveRange;
+  unit._baseMove = 4;
+  unit._baseJump = 2;
+  unit._baseSpeed = speed;
+  unit._baseStats = { ...(charData.attributes || {}) };
+  unit.stats = { ...unit._baseStats };
+  unit.maxHp = baseHp;
+  unit.hp = baseHp;
+  unit.maxMp = 40;
+  unit.mp = 40;
+
+  const fullEquipment = generateFullEquipment(seed, className, weaponSpec, unit.grade);
+  unit.equipment = normalizeEquipment(fullEquipment, seed, className, weaponSpec, unit.grade);
+
+  unit.provenance = {
+    endpoint: '/api/roll/character',
+    seed,
+    className,
+    rolledAt: Date.now(),
+    slotCount: 8
+  };
+
+  recalculateEquipmentStats(unit);
+  return unit;
 }
 
 /**
@@ -1452,6 +2058,7 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
     const isRaidBoss = !!(slot === 0 && !isBlue && options && options.raidBossMode);
     const unitGrade = isRaidBoss ? 'S' : (charData.tierGrade || 'C');
     const fullEquipment = generateFullEquipment(unitSeed, className, weaponSpec, unitGrade);
+    normalizeEquipment(fullEquipment, unitSeed, className, weaponSpec, unitGrade);
     if (isRaidBoss) {
       fullEquipment.tool.finishTier = 'adamantite';
       fullEquipment.tool.boostStars = 5;
@@ -1459,6 +2066,8 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       fullEquipment.tool.grade = 'S';
       fullEquipment.tool.tierGrade = 'S';
       fullEquipment.tool.boostMult = 1.90;
+      fullEquipment.tool.material = 'adamantite';
+      fullEquipment.chest.material = 'adamantite';
     }
 
     const hp = maxHp;
@@ -1486,6 +2095,7 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       className,
       job: className,
       class: className,
+      passive: CLASS_PASSIVES[className] || CLASS_PASSIVES['Knight'],
       isBoss,
       isRaidBoss,
       rank,
@@ -1503,6 +2113,8 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       maxMp: 40,
       speed,
       moveRange,
+      move: 4,
+      jump: 2,
       jumpHeight: 2,
       canTeleport,
       gridX: pos.x,
@@ -1526,14 +2138,24 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       _baseMaxHp: maxHp,
       _baseMaxMp: 40,
       _baseMoveRange: moveRange,
+      _baseMove: 4,
+      _baseJump: 2,
       _baseSpeed: speed,
       _baseStats: { ...(charData.attributes || {}) },
       equipment: fullEquipment,
       yellowCards: 0,
       redCards: 0,
+      provenance: {
+        endpoint: '/api/roll/character',
+        seed: unitSeed,
+        className,
+        rolledAt: Date.now(),
+        slotCount: 8
+      },
       rawCharacter: charData
     };
 
+    recalculateEquipmentStats(unit);
     units.push(unit);
   }
 
@@ -1542,4 +2164,331 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
     units,
     contentVersion: 'setworld-anima-v1'
   };
+}
+
+/**
+ * Multi-Floor Set.world Tower Gauntlet metadata (Floors 1..5).
+ */
+export const GAUNTLET_FLOORS = [
+  { floor: 1, name: 'Floor 1: Outer Causeway Skirmish', enemyCount: 4, statMult: 1.0, desc: '4 enemies, 1.0x stats' },
+  { floor: 2, name: 'Floor 2: Floodgate Garrison', enemyCount: 4, statMult: 1.15, desc: '4 enemies, 1.15x stats' },
+  { floor: 3, name: 'Floor 3: Mythril Forge Sentinels', enemyCount: 5, statMult: 1.3, desc: '5 enemies with guaranteed Mythril/Star-Metal Resonance, 1.3x stats' },
+  { floor: 4, name: 'Floor 4: Imperial High Guard', enemyCount: 5, statMult: 1.45, desc: '5 elite enemies, 1.45x stats' },
+  { floor: 5, name: 'Floor 5: Sovereign Sanctum (Raid Boss)', enemyCount: 3, statMult: 1.6, desc: 'Spawns the 250× Set.world Raid Boss Sovereign via rollRaidBoss(seed) + 2 Royal Guard escorts!' }
+];
+
+/**
+ * Rolls the 250× Set.world Raid Boss Sovereign unit with Adamantite Katana,
+ * Grade S gear, 5 boost stars, and Sovereign Cataclysm skill.
+ */
+export function rollRaidBoss(seed, board = null, pos = { x: 8, z: 7 }) {
+  const normalizedSeed = (seed >>> 0);
+  const charData = generateFallbackCharacter(normalizedSeed);
+  const className = 'Samurai';
+  const weaponSpec = mapToolToWeaponSpec({ name: 'Adamantite Blood Katana', type: 'katana' }, className);
+  const sovereignCataclysm = {
+    id: 'sovereign_cataclysm',
+    name: 'Sovereign Cataclysm',
+    range: { min: 1, max: 3 },
+    anim: 'Katana Use',
+    animPrefix: 'Katana Use',
+    powerMult: 1.65,
+    statusProc: 'frozen',
+    costMp: 10,
+    aoe: 1,
+    desc: 'Unleashes devastating sovereign apocalyptic cold, freezing all in its path.'
+  };
+  weaponSpec.abilities.unshift(sovereignCataclysm);
+  weaponSpec.elementalPrefix = 'Boreal';
+  weaponSpec.statusProc = 'frozen';
+  weaponSpec.finishTier = 'adamantite';
+  weaponSpec.boostStars = 5;
+  weaponSpec.boostMult = 1.90;
+
+  const fullEquipment = generateFullEquipment(normalizedSeed, className, weaponSpec, 'S');
+  fullEquipment.tool.finishTier = 'adamantite';
+  fullEquipment.tool.boostStars = 5;
+  fullEquipment.tool.tier = 'S';
+  fullEquipment.tool.grade = 'S';
+  fullEquipment.tool.tierGrade = 'S';
+  fullEquipment.tool.boostMult = 1.90;
+  fullEquipment.tool.material = 'adamantite';
+  fullEquipment.chest.material = 'adamantite';
+
+  const baseHp = charData.attributes?.maxHealth || 110;
+  const maxHp = Math.round(baseHp * 2.5);
+  const elevation = getTileElevation(board, pos.x, pos.z);
+
+  const boss = {
+    id: 'boss_sovereign',
+    unitId: 'boss_sovereign',
+    seed: normalizedSeed,
+    name: 'Sovereign Malakor [250x RAID BOSS]',
+    team: 'crimson',
+    clan: 'crimson',
+    clanName: 'Crimson Order',
+    className,
+    job: className,
+    class: className,
+    isBoss: true,
+    isRaidBoss: true,
+    rank: 'COMMANDER',
+    archetypeTitle: '250x Raid Overlord',
+    paletteId: 'crimson_warlord',
+    scale: 1.45,
+    grade: 'S',
+    tier: 'S',
+    tierGrade: 'S',
+    finishTier: 'adamantite',
+    boostStars: 5,
+    hp: maxHp,
+    maxHp,
+    mp: 100,
+    maxMp: 100,
+    speed: 22,
+    moveRange: 4,
+    move: 4,
+    jump: 2,
+    jumpHeight: 2,
+    gridX: pos.x,
+    gridZ: pos.z,
+    x: pos.x,
+    z: pos.z,
+    elevation,
+    facing: 'NW',
+    ct: 30,
+    alive: true,
+    weapon: weaponSpec,
+    weaponType: weaponSpec.weaponType,
+    weaponModel: weaponSpec.heldModelName,
+    abilities: weaponSpec.abilities,
+    equipment: fullEquipment,
+    passive: CLASS_PASSIVES['Samurai'],
+    stats: {
+      physicalDamage: Math.round((charData.attributes?.physicalDamage || 25) * 1.5),
+      magicDamage: Math.round((charData.attributes?.magicDamage || 20) * 1.3),
+      armor: Math.round((charData.attributes?.armor || 12) * 1.6),
+      accuracy: 95,
+      dodge: 25
+    },
+    provenance: {
+      endpoint: '/api/roll/character',
+      seed: normalizedSeed,
+      className,
+      rolledAt: Date.now(),
+      slotCount: 8
+    }
+  };
+
+  normalizeEquipment(boss.equipment, normalizedSeed, className, weaponSpec, 'S');
+  recalculateEquipmentStats(boss);
+  return boss;
+}
+
+/**
+ * Rolls enemies for a specific floor in the Multi-Floor Set.world Tower Gauntlet.
+ */
+export function rollGauntletFloorEnemies(seed, floor = 1, board = null) {
+  const normalizedSeed = (seed >>> 0);
+  const floorMeta = GAUNTLET_FLOORS.find((f) => f.floor === floor) || GAUNTLET_FLOORS[0];
+  const statMult = floorMeta.statMult || 1.0;
+
+  const candidatePositions = [
+    { x: 8, z: 7 }, { x: 7, z: 8 }, { x: 7, z: 6 },
+    { x: 6, z: 7 }, { x: 8, z: 8 }, { x: 9, z: 7 }, { x: 9, z: 8 }
+  ];
+
+  const pickedPositions = [];
+  for (const pos of candidatePositions) {
+    if (pickedPositions.length >= (floorMeta.enemyCount || 4)) break;
+    if (isWalkableNonWater(board, pos.x, pos.z)) {
+      pickedPositions.push(pos);
+    }
+  }
+  while (pickedPositions.length < (floorMeta.enemyCount || 4)) {
+    pickedPositions.push({ x: 9 - pickedPositions.length, z: 8 });
+  }
+
+  const enemies = [];
+
+  if (floor === 5) {
+    // Floor 5: Sovereign Sanctum (Raid Boss) + 2 Royal Guards
+    const boss = rollRaidBoss(deriveSeed(normalizedSeed, 501), board, pickedPositions[0]);
+    enemies.push(boss);
+
+    const guardClasses = ['Dreadnought', 'Paladin'];
+    for (let i = 0; i < 2; i++) {
+      const gSeed = deriveSeed(normalizedSeed, 502 + i);
+      const gClass = guardClasses[i];
+      const gPos = pickedPositions[i + 1] || { x: 7 + i, z: 8 };
+      const gChar = generateFallbackCharacter(gSeed);
+      const gWeapon = mapToolToWeaponSpec(
+        gClass === 'Dreadnought' ? { name: 'Titanium Bulwark', type: 'shield' } : { name: 'Adamantite Holy Sword', type: 'sword' },
+        gClass
+      );
+      const gElev = getTileElevation(board, gPos.x, gPos.z);
+      const gGrade = 'A';
+      const gEq = generateFullEquipment(gSeed, gClass, gWeapon, gGrade);
+      normalizeEquipment(gEq, gSeed, gClass, gWeapon, gGrade);
+
+      const guard = {
+        id: `royal_guard_${i + 1}`,
+        unitId: `royal_guard_${i + 1}`,
+        seed: gSeed,
+        name: `Royal Guard ${gClass} ${i + 1}`,
+        team: 'crimson',
+        clan: 'crimson',
+        clanName: 'Crimson Order',
+        className: gClass,
+        job: gClass,
+        class: gClass,
+        isBoss: false,
+        rank: 'VANGUARD',
+        archetypeTitle: 'Royal Guard',
+        paletteId: 'crimson_vanguard',
+        scale: 1.12,
+        grade: gGrade,
+        tier: gGrade,
+        tierGrade: gGrade,
+        finishTier: 'mythril',
+        boostStars: 3,
+        hp: Math.round((gChar.attributes?.maxHealth || 100) * statMult),
+        maxHp: Math.round((gChar.attributes?.maxHealth || 100) * statMult),
+        mp: 40,
+        maxMp: 40,
+        speed: 18,
+        moveRange: 3,
+        move: 4,
+        jump: 2,
+        jumpHeight: 2,
+        gridX: gPos.x,
+        gridZ: gPos.z,
+        x: gPos.x,
+        z: gPos.z,
+        elevation: gElev,
+        facing: 'NW',
+        ct: 20 + i * 5,
+        alive: true,
+        weapon: gWeapon,
+        weaponType: gWeapon.weaponType,
+        weaponModel: gWeapon.heldModelName,
+        abilities: gWeapon.abilities,
+        equipment: gEq,
+        passive: CLASS_PASSIVES[gClass],
+        stats: {
+          physicalDamage: Math.round((gChar.attributes?.physicalDamage || 20) * statMult),
+          magicDamage: Math.round((gChar.attributes?.magicDamage || 16) * statMult),
+          armor: Math.round((gChar.attributes?.armor || 12) * statMult),
+          accuracy: 85,
+          dodge: 15
+        },
+        provenance: {
+          endpoint: '/api/roll/character',
+          seed: gSeed,
+          className: gClass,
+          rolledAt: Date.now(),
+          slotCount: 8
+        }
+      };
+      recalculateEquipmentStats(guard);
+      enemies.push(guard);
+    }
+  } else {
+    const classPool = [
+      'Dragoon', 'Samurai', 'Fusilier', 'Archer', 'Mesmer',
+      'Herald', 'Paladin', 'Berserker', 'Land Reaver', 'Dreadnought', 'Scholar'
+    ];
+
+    for (let i = 0; i < floorMeta.enemyCount; i++) {
+      const eSeed = deriveSeed(normalizedSeed, (floor * 100) + i);
+      const eClass = classPool[(eSeed + i) % classPool.length];
+      const ePos = pickedPositions[i] || { x: 8, z: 7 };
+      const eChar = generateFallbackCharacter(eSeed);
+      const eElev = getTileElevation(board, ePos.x, ePos.z);
+      const eGrade = floor >= 4 ? 'A' : (floor >= 3 ? 'B' : (eChar.tierGrade || 'C'));
+      const eWeapon = mapToolToWeaponSpec(eChar.equipment?.tool, eClass);
+      const eEq = generateFullEquipment(eSeed, eClass, eWeapon, eGrade);
+
+      if (floor === 3) {
+        // Floor 3: Mythril Forge Sentinels guaranteed Mythril/Star-Metal Resonance
+        eEq.tool.material = 'mythril';
+        eEq.head.material = 'mythril';
+        eEq.chest.material = 'star-metal';
+        eEq.legs.material = 'star-metal';
+      }
+
+      normalizeEquipment(eEq, eSeed, eClass, eWeapon, eGrade);
+
+      const baseHp = Math.round((eChar.attributes?.maxHealth || 95) * statMult);
+      const enemy = {
+        id: `gauntlet_f${floor}_e${i + 1}`,
+        unitId: `gauntlet_f${floor}_e${i + 1}`,
+        seed: eSeed,
+        name: `${eClass} Sentinel ${i + 1}`,
+        team: 'crimson',
+        clan: 'crimson',
+        clanName: 'Crimson Order',
+        className: eClass,
+        job: eClass,
+        class: eClass,
+        isBoss: (i === 0 && floor >= 4),
+        rank: (i === 0 && floor >= 4) ? 'COMMANDER' : 'SOLDIER',
+        archetypeTitle: `${floorMeta.name} Combatant`,
+        paletteId: 'crimson_warlord',
+        scale: (i === 0 && floor >= 4) ? 1.15 : 1.0,
+        grade: eGrade,
+        tier: eGrade,
+        tierGrade: eGrade,
+        finishTier: floor >= 3 ? 'iron' : 'bronze',
+        boostStars: floor >= 4 ? 2 : (floor >= 3 ? 1 : 0),
+        hp: baseHp,
+        maxHp: baseHp,
+        mp: 40,
+        maxMp: 40,
+        speed: Math.round((eChar.attributes?.walkSpeed || 1.0) * 10) + 6,
+        moveRange: 3 + ((eChar.attributes?.walkSpeed || 1.0) > 1.25 ? 1 : 0),
+        move: 4,
+        jump: 2,
+        jumpHeight: 2,
+        gridX: ePos.x,
+        gridZ: ePos.z,
+        x: ePos.x,
+        z: ePos.z,
+        elevation: eElev,
+        facing: 'NW',
+        ct: 15 + i * 5,
+        alive: true,
+        weapon: eWeapon,
+        weaponType: eWeapon.weaponType,
+        weaponModel: eWeapon.heldModelName,
+        abilities: eWeapon.abilities,
+        equipment: eEq,
+        passive: CLASS_PASSIVES[eClass] || CLASS_PASSIVES['Knight'],
+        stats: {
+          physicalDamage: Math.round((eChar.attributes?.physicalDamage || 18) * statMult),
+          magicDamage: Math.round((eChar.attributes?.magicDamage || 16) * statMult),
+          armor: Math.round((eChar.attributes?.armor || 8) * statMult),
+          accuracy: Math.round((eChar.attributes?.accuracy || 75) * (1 + (statMult - 1) * 0.2)),
+          dodge: Math.round((eChar.attributes?.dodge || 10) * (1 + (statMult - 1) * 0.2))
+        },
+        provenance: {
+          endpoint: '/api/roll/character',
+          seed: eSeed,
+          className: eClass,
+          rolledAt: Date.now(),
+          slotCount: 8
+        }
+      };
+      recalculateEquipmentStats(enemy);
+      enemies.push(enemy);
+    }
+  }
+
+  // Support both array usage and object destructuring { floor, name, enemies, statMult }
+  enemies.enemies = enemies;
+  enemies.floor = floor;
+  enemies.name = floorMeta.name;
+  enemies.statMult = statMult;
+  enemies.meta = floorMeta;
+  return enemies;
 }
