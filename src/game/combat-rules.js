@@ -1631,3 +1631,7 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
 
   return outcome;
 }
+
+// Re-export Stratagem Engine & Gambit AI
+export * from './stratagem-engine.js';
+

@@ -7,6 +7,9 @@
  * offline fallbacks.
  */
 
+import { createDefaultStratagem } from './stratagem-engine.js';
+
+
 // Canonical Set.world seed derivation: (seed + i * 0x9E3779B9) >>> 0
 export const deriveSeed = (seed, i) => ((seed >>> 0) + Math.imul(i, 0x9E3779B9)) >>> 0;
 
@@ -42,6 +45,655 @@ export const CLASS_PASSIVES = {
   Knight: { id: 'chivalric_honor', name: 'Chivalric Honor', icon: '🛡️', desc: '+15% DEF when adjacent to allies' },
   'Black Mage': { id: 'elemental_mastery', name: 'Elemental Mastery', icon: '🔥', desc: '+20% Magic skill damage' }
 };
+
+/**
+ * Canonical 9 Set.world Base Stats (SET_AGENTS.md Step 2, /api/stats)
+ */
+export const SETWORLD_NINE_STATS = [
+  'strength',
+  'dexterity',
+  'intelligence',
+  'wisdom',
+  'agility',
+  'vitality',
+  'perception',
+  'resolve',
+  'luck'
+];
+
+/**
+ * 12 Distinct Set.world Character Advantages with stat and combat modifiers
+ */
+export const ADVANTAGES_CATALOG = [
+  {
+    id: 'brave',
+    name: 'Brave Heart',
+    statMods: { resolve: 3, strength: 1 },
+    combatMod: { moraleBonus: 0.15, critResistance: 0.10, physicalDamage: 3 },
+    desc: 'Tempered by basalt trials; unyielding against fear and paralysis.'
+  },
+  {
+    id: 'keen_eyed',
+    name: 'Keen Eyed',
+    statMods: { perception: 3, dexterity: 1 },
+    combatMod: { accuracy: 8, crit: 5 },
+    desc: 'Discerning the micro-fractures in plate and the tremor in incoming arrows.'
+  },
+  {
+    id: 'iron_constitution',
+    name: 'Iron Constitution',
+    statMods: { vitality: 3, strength: 1 },
+    combatMod: { hpBonus: 25, poisonResistance: 0.30, defense: 2 },
+    desc: 'Blood runs thick like boiled resin; toxins find no fertile ground.'
+  },
+  {
+    id: 'arcane_affinity',
+    name: 'Arcane Affinity',
+    statMods: { intelligence: 3, wisdom: 1 },
+    combatMod: { magicDamage: 6, mpBonus: 15 },
+    desc: 'Naturally attuned to ley resonances and astral ebb.'
+  },
+  {
+    id: 'fleet_footed',
+    name: 'Fleet Footed',
+    statMods: { agility: 3, dexterity: 1 },
+    combatMod: { speed: 4, dodge: 6 },
+    desc: 'Skims across shale and gravel without displacing a stone.'
+  },
+  {
+    id: 'fortune_favored',
+    name: 'Fortune Favored',
+    statMods: { luck: 3, perception: 1 },
+    combatMod: { crit: 6, orbBonus: 0.15 },
+    desc: 'The capricious hand of chance turns lethal edge into glancing blow.'
+  },
+  {
+    id: 'stoic_mind',
+    name: 'Stoic Mind',
+    statMods: { wisdom: 3, resolve: 1 },
+    combatMod: { magicResistance: 5, confusionImmunity: true },
+    desc: 'Quiet contemplation shields consciousness from psychic tumult.'
+  },
+  {
+    id: 'titan_grip',
+    name: 'Titan Grip',
+    statMods: { strength: 3, vitality: 1 },
+    combatMod: { physicalDamage: 6, knockbackBonus: 1 },
+    desc: 'Forearms bound in sinew; heavy weapons swing like willow wands.'
+  },
+  {
+    id: 'deadeye_focus',
+    name: 'Deadeye Focus',
+    statMods: { dexterity: 3, perception: 1 },
+    combatMod: { accuracy: 12, rangeBonus: 1 },
+    desc: 'Wind and distance collapse into a singular fatal focal plane.'
+  },
+  {
+    id: 'resilient_spirit',
+    name: 'Resilient Spirit',
+    statMods: { resolve: 2, vitality: 2 },
+    combatMod: { defense: 4, regenPerTurn: 4 },
+    desc: 'Each wound knits under stubborn defiance of the end.'
+  },
+  {
+    id: 'nimble_grace',
+    name: 'Nimble Grace',
+    statMods: { agility: 2, luck: 2 },
+    combatMod: { dodge: 8, moveBonus: 1 },
+    desc: 'Moves like smoke between heavy downward strikes.'
+  },
+  {
+    id: 'scholarly_wit',
+    name: 'Scholarly Wit',
+    statMods: { intelligence: 2, wisdom: 2 },
+    combatMod: { mpCostReduction: 0.15, magicDamage: 4 },
+    desc: 'Understands the architectural geometry of every hex.'
+  }
+];
+
+/**
+ * 12 Distinct Set.world Character Disadvantages with stat modifiers
+ */
+export const DISADVANTAGES_CATALOG = [
+  {
+    id: 'frail_frame',
+    name: 'Frail Frame',
+    statMods: { vitality: -2, strength: -1 },
+    desc: 'Bones hollowed by old malady; cannot sustain heavy concussive impacts.'
+  },
+  {
+    id: 'tunnel_vision',
+    name: 'Tunnel Vision',
+    statMods: { perception: -2, agility: -1 },
+    desc: 'Fixates entirely upon the nearest foe, blind to flanking maneuvers.'
+  },
+  {
+    id: 'hot_headed',
+    name: 'Hot Headed',
+    statMods: { wisdom: -2, resolve: -1 },
+    desc: 'Prone to reckless charges and vulnerable to baiting.'
+  },
+  {
+    id: 'lead_footed',
+    name: 'Lead Footed',
+    statMods: { agility: -2, dexterity: -1 },
+    desc: 'Treads heavily upon the marshland; slow to reposition.'
+  },
+  {
+    id: 'jinxed',
+    name: 'Jinxed Star',
+    statMods: { luck: -3 },
+    desc: 'Born under a cold, eclipsing moon where misfortune clings like damp wool.'
+  },
+  {
+    id: 'blunt_senses',
+    name: 'Blunt Senses',
+    statMods: { perception: -3 },
+    desc: 'Ears ringing from old cannon fire; slow to register peripheral threats.'
+  },
+  {
+    id: 'brittle_nerve',
+    name: 'Brittle Nerve',
+    statMods: { resolve: -2, wisdom: -1 },
+    desc: 'Hesitates when surrounded by shrieking monstrosities.'
+  },
+  {
+    id: 'feeble_grip',
+    name: 'Feeble Grip',
+    statMods: { strength: -2, dexterity: -1 },
+    desc: 'Tendons stiffened by winter frost; struggles with high-tension drawstrings.'
+  },
+  {
+    id: 'arcane_dulled',
+    name: 'Arcane Dulled',
+    statMods: { intelligence: -2, wisdom: -1 },
+    desc: 'Unable to sense mana flow or channel incantations efficiently.'
+  },
+  {
+    id: 'sluggish_reflexes',
+    name: 'Sluggish Reflexes',
+    statMods: { agility: -1, perception: -2 },
+    desc: 'Delays half a breath before raising ward against incoming lunges.'
+  },
+  {
+    id: 'reckless_brawler',
+    name: 'Reckless Posture',
+    statMods: { resolve: -1, dexterity: -2 },
+    desc: 'Throws balance forward indiscriminately, leaving flank exposed.'
+  },
+  {
+    id: 'unlucky_heir',
+    name: 'Cursed Lineage',
+    statMods: { luck: -2, vitality: -1 },
+    desc: 'Shadow of ancestral debt follows every dice roll and sword stroke.'
+  }
+];
+
+/**
+ * 16 Set.world Character Talents written in Set.world's dry, literary in-world prose voice.
+ */
+export const TALENTS_CODEX = [
+  {
+    id: 'leyline_walker',
+    name: 'Leyline Walker',
+    flavor: 'Walks the faultlines where unmanifested energy bleeds through the bedrock.',
+    bonusDesc: '+4 Wisdom, +4 Intelligence, +15 Max MP',
+    stats: { wisdom: 4, intelligence: 4, mpBonus: 15 }
+  },
+  {
+    id: 'basalt_sentinel',
+    name: 'Basalt Sentinel',
+    flavor: 'A mind carved from mountain roots; unyielding where iron rusts.',
+    bonusDesc: '+5 Vitality, +3 Resolve, +6 Armor',
+    stats: { vitality: 5, resolve: 3, armor: 6 }
+  },
+  {
+    id: 'tempest_stride',
+    name: 'Tempest Stride',
+    flavor: 'Passing between rain squalls without breaking stride.',
+    bonusDesc: '+5 Agility, +3 Dexterity, +1 Movement',
+    stats: { agility: 5, dexterity: 3, moveBonus: 1 }
+  },
+  {
+    id: 'iron_hymnal',
+    name: 'Iron Hymnal',
+    flavor: 'An anthem sung in the register of struck anvils.',
+    bonusDesc: '+4 Resolve, +4 Strength, +4 Physical Damage',
+    stats: { resolve: 4, strength: 4, physicalDamage: 4 }
+  },
+  {
+    id: 'astral_cartographer',
+    name: 'Astral Cartographer',
+    flavor: 'Plotting celestial trajectories while feet remain in the mud.',
+    bonusDesc: '+5 Intelligence, +3 Perception, +8 Magic Damage',
+    stats: { intelligence: 5, perception: 3, magicDamage: 8 }
+  },
+  {
+    id: 'blade_whisper',
+    name: 'Blade Whisper',
+    flavor: 'The grain of folded steel reveals where the cut must travel.',
+    bonusDesc: '+5 Dexterity, +3 Strength, +8% Critical Rate',
+    stats: { dexterity: 5, strength: 3, critBonus: 8 }
+  },
+  {
+    id: 'crag_reaver',
+    name: 'Crag Reaver',
+    flavor: 'Carving paths through scree where lesser climbers tumble.',
+    bonusDesc: '+5 Strength, +3 Vitality, +5 Physical Damage',
+    stats: { strength: 5, vitality: 3, physicalDamage: 5 }
+  },
+  {
+    id: 'dusk_stalker',
+    name: 'Dusk Stalker',
+    flavor: 'Striking only when twilight turns silhouette into memory.',
+    bonusDesc: '+4 Agility, +4 Perception, +10 Accuracy',
+    stats: { agility: 4, perception: 4, accuracy: 10 }
+  },
+  {
+    id: 'sovereign_aegis',
+    name: 'Sovereign Aegis',
+    flavor: 'The oath outlives the empire; the shield stands after the banner falls.',
+    bonusDesc: '+5 Vitality, +3 Resolve, +5 Block Chance',
+    stats: { vitality: 5, resolve: 3, blockChance: 5 }
+  },
+  {
+    id: 'mirage_weaver',
+    name: 'Mirage Weaver',
+    flavor: 'Spinning thread from heat shimmer and broken echoes.',
+    bonusDesc: '+4 Agility, +4 Intelligence, +8 Dodge',
+    stats: { agility: 4, intelligence: 4, dodge: 8 }
+  },
+  {
+    id: 'orator_cadence',
+    name: 'Orator Cadence',
+    flavor: 'A voice measured to quiet mutiny and turn bitter foes to cause.',
+    bonusDesc: '+5 Resolve, +3 Wisdom, +4 Magic Damage',
+    stats: { resolve: 5, wisdom: 3, magicDamage: 4 }
+  },
+  {
+    id: 'seraph_vow',
+    name: 'Seraph Vow',
+    flavor: 'Blood shed for companions knits into silver thread.',
+    bonusDesc: '+4 Wisdom, +4 Vitality, +20 Max HP',
+    stats: { wisdom: 4, vitality: 4, hpBonus: 20 }
+  },
+  {
+    id: 'highland_ballista',
+    name: 'Highland Ballista',
+    flavor: 'Release the heavy bolt before the valley bells cease tolling.',
+    bonusDesc: '+5 Perception, +3 Dexterity, +8 Accuracy',
+    stats: { perception: 5, dexterity: 3, accuracy: 8 }
+  },
+  {
+    id: 'void_diver',
+    name: 'Void Diver',
+    flavor: 'Plunging into dark currents that swallow light and return cold fury.',
+    bonusDesc: '+4 Strength, +4 Intelligence, +15% Lifesteal',
+    stats: { strength: 4, intelligence: 4, lifesteal: 0.15 }
+  },
+  {
+    id: 'fortune_hound',
+    name: 'Fortune Hound',
+    flavor: 'Sniffing out ancient caches buried beneath basalt scree.',
+    bonusDesc: '+6 Luck, +2 Perception, +5% Crit',
+    stats: { luck: 6, perception: 2, critBonus: 5 }
+  },
+  {
+    id: 'glacial_warden',
+    name: 'Glacial Warden',
+    flavor: 'Cold that locks rivers solid; patience that outlasts siege.',
+    bonusDesc: '+5 Vitality, +3 Wisdom, +6 Magic Resistance',
+    stats: { vitality: 5, wisdom: 3, magicResistance: 6 }
+  }
+];
+
+/**
+ * Canonical Guarantee Craft Costs by Tier (SET_AGENTS.md Step 6, /api/craft?tier=)
+ */
+export const GUARANTEE_CRAFT_COSTS = {
+  F: 15,
+  E: 30,
+  D: 60,
+  C: 120,
+  B: 240,
+  A: 480,
+  S: 900
+};
+
+// Orb Ledger localStorage Persistence
+const ORB_LEDGER_STORAGE_KEY = 'intdevtactics_orb_ledger_v1';
+let inMemoryLedger = [];
+
+export function getOrbLedger() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(ORB_LEDGER_STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    }
+  } catch (err) {}
+  return [...inMemoryLedger];
+}
+
+export function recordOrbLedgerEntry(entry) {
+  const record = {
+    ...entry,
+    timestamp: entry?.timestamp || Date.now()
+  };
+  let ledger = getOrbLedger();
+  ledger.unshift(record);
+  if (ledger.length > 50) {
+    ledger = ledger.slice(0, 50);
+  }
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(ORB_LEDGER_STORAGE_KEY, JSON.stringify(ledger));
+    }
+  } catch (err) {}
+  inMemoryLedger = ledger;
+  return record;
+}
+
+export function clearOrbLedger() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(ORB_LEDGER_STORAGE_KEY);
+    }
+  } catch (err) {}
+  inMemoryLedger = [];
+}
+
+/**
+ * Implements SET_AGENTS.md Step 6 GuaranteeCraft (/api/craft?tier=).
+ * Deterministically generates an item of exact grade tier in slotFilter,
+ * complete with material, prefix, stats, provenance, and records to OrbLedger.
+ */
+export function craftGuaranteedTier(tier = 'A', slotFilter = null, seed = null) {
+  const normTier = (tier || 'A').toString().toUpperCase();
+  const validTiers = ['F', 'E', 'D', 'C', 'B', 'A', 'S'];
+  const finalTier = validTiers.includes(normTier) ? normTier : 'A';
+  const cost = GUARANTEE_CRAFT_COSTS[finalTier] || 480;
+
+  const normalizedSeed = (seed !== null && seed !== undefined ? seed : Math.floor(Math.random() * 0xffffffff)) >>> 0;
+  const rng = createSeededRng(normalizedSeed);
+
+  const slot = (slotFilter && slotFilter !== 'all')
+    ? slotFilter
+    : EQUIPMENT_SLOTS[Math.abs(deriveSeed(normalizedSeed, 7)) % EQUIPMENT_SLOTS.length];
+
+  const gradeIndex = validTiers.indexOf(finalTier);
+  const mat = rng.choice(SETWORLD_MATERIALS);
+  const prefix = rng.choice(SETWORLD_PREFIXES);
+  const slotOptions = SLOT_CATEGORIES[slot] || [`${slot} relic`];
+  const baseName = rng.choice(slotOptions);
+  const capPrefix = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  const capMat = mat.charAt(0).toUpperCase() + mat.slice(1);
+  const fullName = `${capPrefix} ${capMat} ${baseName}`;
+
+  const score = parseFloat((1.0 + gradeIndex * 2.2 + rng.next() * 1.8).toFixed(2));
+  const boostStars = Math.max(0, gradeIndex - 1);
+
+  const item = {
+    id: `item_craft_${finalTier}_${slot}_${normalizedSeed}`,
+    name: fullName,
+    slot,
+    tier: finalTier,
+    grade: finalTier,
+    tierGrade: finalTier,
+    score,
+    orbValue: Math.round(cost * 0.9),
+    seed: normalizedSeed,
+    material: mat,
+    materialName: mat,
+    prefix,
+    boostStars,
+    props: [{ name: prefix, tierGrade: finalTier }],
+    stats: {},
+    provenance: {
+      endpoint: `/api/craft?tier=${finalTier}`,
+      mode: 'guarantee',
+      tier: finalTier,
+      cost,
+      ruleStamp: 'set-world-0-15-8-craft-guarantee-1',
+      seed: normalizedSeed
+    }
+  };
+
+  if (slot === 'tool') {
+    item.boostMult = 1.0 + boostStars * 0.18;
+  } else if (slot === 'feet') {
+    item.moveBonus = (gradeIndex >= 2) ? 1 : 0;
+    item.jumpBonus = (gradeIndex >= 4) ? 1 : 0;
+    item.stats = { speed: 4 + gradeIndex, dodge: 3 + gradeIndex };
+  } else if (slot === 'neck') {
+    item.amuletWard = (finalTier === 'S' || finalTier === 'A');
+    item.stats = {
+      magicDamage: 8 + gradeIndex * 2,
+      armor: 4 + gradeIndex,
+      lck: 6 + gradeIndex,
+      def: 4 + gradeIndex,
+      mag: 8 + gradeIndex * 2
+    };
+  } else {
+    item.stats = {
+      armor: 2 * (gradeIndex + 1),
+      magicResistance: gradeIndex + 1,
+      maxHealth: 10 * (gradeIndex + 1)
+    };
+  }
+
+  recordOrbLedgerEntry({
+    type: 'craft_guarantee',
+    tier: finalTier,
+    cost,
+    itemId: item.id,
+    itemName: item.name,
+    slot: item.slot,
+    ruleStamp: 'set-world-0-15-8-craft-guarantee-1',
+    timestamp: Date.now()
+  });
+
+  return {
+    item,
+    cost,
+    tier: finalTier,
+    mode: 'guarantee',
+    ruleStamp: 'set-world-0-15-8-craft-guarantee-1'
+  };
+}
+
+/**
+ * Implements SET_AGENTS.md Step 10 SalvageResponse (/api/salvage).
+ * Computes orbs = Math.max(10, Math.round((GUARANTEE_CRAFT_COSTS[item?.grade] || 40) * 0.45)).
+ * Records entry in OrbLedger.
+ */
+export function salvageEquipmentItem(item, seed = null) {
+  const grade = (
+    item?.grade ||
+    item?.tierGrade ||
+    item?.tier ||
+    item?.material?.tierGrade ||
+    'C'
+  ).toString().toUpperCase();
+
+  const cost = GUARANTEE_CRAFT_COSTS[grade] || 40;
+  const orbs = Math.max(10, Math.round(cost * 0.45));
+
+  const entry = {
+    type: 'salvage',
+    orbs,
+    itemId: item?.id || (item?.seed ? `item_${item.seed}_${item?.slot || 'gear'}` : 'item_salvage'),
+    itemName: item?.name || 'Salvaged Equipment',
+    grade,
+    material: item?.material || 'iron',
+    ruleStamp: 'set-world-0-15-8-salvage-1',
+    timestamp: Date.now()
+  };
+  recordOrbLedgerEntry(entry);
+
+  return {
+    orbs,
+    itemId: item?.id,
+    itemName: item?.name,
+    grade,
+    material: item?.material,
+    ruleStamp: 'set-world-0-15-8-salvage-1'
+  };
+}
+
+/**
+ * Synthesizes 9 Set.world base stats from a seed in 8..24 range.
+ */
+function synthesizeNineStats(seed) {
+  const norm = (seed >>> 0) || 1337;
+  const result = {};
+  for (let i = 0; i < SETWORLD_NINE_STATS.length; i++) {
+    const sRng = createSeededRng(deriveSeed(norm, 200 + i));
+    result[SETWORLD_NINE_STATS[i]] = 10 + sRng.nextInt(0, 8); // 10..17
+  }
+  return result;
+}
+
+/**
+ * Implements SET_AGENTS.md Step 10 DropResponse (/api/drop?stats=str-dex-int-wis-agi-vit-per-res-lck&class=trash|elite|boss).
+ * Reads the 9 Set.world base stats on fallenUnit.finalStats (or synthesizes them),
+ * formats the 9-stat vector string, determines dropClass, computes deterministic orbs,
+ * and records to OrbLedger.
+ */
+export function calculateEnemyDropOrbs(fallenUnit, seed = null) {
+  const dropSeed = (seed !== null && seed !== undefined ? seed : (fallenUnit?.seed || 1337)) >>> 0;
+  const rng = createSeededRng(deriveSeed(dropSeed, 888));
+
+  const fs = fallenUnit?.finalStats || synthesizeNineStats(dropSeed);
+  const statVector = SETWORLD_NINE_STATS.map((s) => fs[s] ?? 12).join('-');
+
+  const isBoss = !!(fallenUnit?.isBoss || fallenUnit?.isRaidBoss || fallenUnit?.rank === 'COMMANDER');
+  const gradeKey = (fallenUnit?.grade || fallenUnit?.tierGrade || fallenUnit?.tier || 'C').toString().toUpperCase();
+  const isElite = (gradeKey === 'A' || gradeKey === 'S' || fallenUnit?.rank === 'ELITE');
+
+  const dropClass = isBoss ? 'boss' : (isElite ? 'elite' : 'trash');
+
+  let orbs;
+  if (dropClass === 'boss') {
+    orbs = rng.nextInt(180, 250);
+  } else if (dropClass === 'elite') {
+    orbs = rng.nextInt(65, 95);
+  } else {
+    orbs = rng.nextInt(35, 55);
+  }
+
+  const endpoint = `/api/drop?stats=${statVector}&class=${dropClass}&seed=${fallenUnit?.seed || dropSeed}`;
+
+  const entry = {
+    type: 'drop',
+    orbs,
+    dropClass,
+    statVector,
+    unitId: fallenUnit?.id || 'unknown_unit',
+    unitName: fallenUnit?.name || 'Fallen Combatant',
+    ruleStamp: 'set-world-0-15-8-drop-1',
+    timestamp: Date.now()
+  };
+  recordOrbLedgerEntry(entry);
+
+  return {
+    orbs,
+    dropClass,
+    statVector,
+    endpoint,
+    ruleStamp: 'set-world-0-15-8-drop-1'
+  };
+}
+
+/**
+ * Populates 9-stat finalStats, advantage, disadvantage, talent, StratagemDocument,
+ * and Birth Certificate onto a unit.
+ */
+export function populateUnitBirthCertificate(unit) {
+  if (!unit) return unit;
+  const seed = (unit.seed !== undefined ? unit.seed : 1337) >>> 0;
+  unit.seed = seed;
+
+  // 1. Synthesize / Ensure all 9 stats in finalStats
+  if (!unit.finalStats || typeof unit.finalStats !== 'object') {
+    unit.finalStats = synthesizeNineStats(seed);
+  } else {
+    for (let i = 0; i < SETWORLD_NINE_STATS.length; i++) {
+      const s = SETWORLD_NINE_STATS[i];
+      if (unit.finalStats[s] === undefined) {
+        const sRng = createSeededRng(deriveSeed(seed, 200 + i));
+        unit.finalStats[s] = 10 + sRng.nextInt(0, 8);
+      }
+    }
+  }
+
+  // 2. Select Advantage, Disadvantage, Talent deterministically
+  if (!unit.advantage) {
+    const advIndex = Math.abs(deriveSeed(seed, 301)) % ADVANTAGES_CATALOG.length;
+    unit.advantage = ADVANTAGES_CATALOG[advIndex];
+  }
+  if (!unit.disadvantage) {
+    const disIndex = Math.abs(deriveSeed(seed, 302)) % DISADVANTAGES_CATALOG.length;
+    unit.disadvantage = DISADVANTAGES_CATALOG[disIndex];
+  }
+  if (!unit.talent) {
+    const talIndex = Math.abs(deriveSeed(seed, 303)) % TALENTS_CODEX.length;
+    unit.talent = TALENTS_CODEX[talIndex];
+  }
+
+  // 3. Fold stat mods into finalStats
+  if (unit.advantage?.statMods) {
+    for (const [st, val] of Object.entries(unit.advantage.statMods)) {
+      if (unit.finalStats[st] !== undefined) {
+        unit.finalStats[st] = Math.max(1, unit.finalStats[st] + val);
+      }
+    }
+  }
+  if (unit.disadvantage?.statMods) {
+    for (const [st, val] of Object.entries(unit.disadvantage.statMods)) {
+      if (unit.finalStats[st] !== undefined) {
+        unit.finalStats[st] = Math.max(1, unit.finalStats[st] + val);
+      }
+    }
+  }
+  if (unit.talent?.stats) {
+    for (const [st, val] of Object.entries(unit.talent.stats)) {
+      if (unit.finalStats[st] !== undefined && typeof val === 'number') {
+        unit.finalStats[st] = Math.max(1, unit.finalStats[st] + val);
+      }
+    }
+  }
+
+  // 4. Attach Birth Certificate
+  unit.birthCertificate = {
+    contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg',
+    releaseVersion: '0.15.8',
+    ruleStamp: 'set-world-0-15-8-character-1',
+    seed: unit.seed,
+    certificateUrl: `https://set.world/roll/character?seed=${unit.seed}`,
+    finalStats: unit.finalStats,
+    advantage: unit.advantage,
+    disadvantage: unit.disadvantage,
+    talent: unit.talent
+  };
+
+  // 5. Attach StratagemDocument
+  if (!unit.stratagem) {
+    unit.stratagem = createDefaultStratagem(unit);
+  }
+
+  return unit;
+}
+
+/**
+ * Normalizes a unit with full Set.world birth certificate and equipment recalculation.
+ */
+export function normalizeUnit(unit) {
+  if (!unit) return unit;
+  populateUnitBirthCertificate(unit);
+  recalculateEquipmentStats(unit);
+  return unit;
+}
+
 
 // In-memory caches by seed
 export const charCache = new Map();
@@ -217,7 +869,7 @@ export function generateFallbackCharacter(seed) {
   let toolSeed = deriveSeed(seed, 101);
   let toolItem = generateFallbackItem(toolSeed, 'tool');
 
-  return {
+  const char = {
     seed: (seed >>> 0),
     name: `${className} of the ${rng.choice(['Azure', 'Crimson', 'Obsidian', 'Solar', 'Verdant'])}`,
     className,
@@ -258,6 +910,9 @@ export function generateFallbackCharacter(seed) {
     },
     contentVersion: 'setworld-anima-v1'
   };
+
+  populateUnitBirthCertificate(char);
+  return char;
 }
 
 /**
@@ -320,6 +975,7 @@ export async function rollCharacter(seed) {
     const url = `https://set.world/api/roll/character?seed=${normalizedSeed}&equipmentBonus=1`;
     const data = await fetchWithTimeout(url, 600);
     if (data && (data.class || data.attributes)) {
+      populateUnitBirthCertificate(data);
       charCache.set(normalizedSeed, data);
       return data;
     }
@@ -1673,6 +2329,177 @@ export function recalculateEquipmentStats(unit) {
     }
   }
 
+  // Fold in Set.world Advantage, Disadvantage, and Talent
+  if (unit.advantage) {
+    if (unit.advantage.statMods) {
+      if (unit.advantage.statMods.strength) {
+        const strBonus = unit.advantage.statMods.strength;
+        unit.stats.physicalDamage = (unit.stats.physicalDamage || 0) + strBonus;
+      }
+      if (unit.advantage.statMods.vitality) {
+        const vitBonus = unit.advantage.statMods.vitality;
+        unit.maxHp += vitBonus * 3;
+        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += vitBonus * 3;
+        unit.armor += Math.round(vitBonus * 0.5);
+        unit.stats.armor = (unit.stats.armor || 0) + Math.round(vitBonus * 0.5);
+      }
+      if (unit.advantage.statMods.agility) {
+        const agiBonus = unit.advantage.statMods.agility;
+        unit.speed += agiBonus;
+        unit.stats.speed = (unit.stats.speed || 15) + agiBonus;
+        unit.dodge = (unit.dodge || 0) + agiBonus;
+        unit.stats.dodge = (unit.stats.dodge || 0) + agiBonus;
+      }
+      if (unit.advantage.statMods.intelligence) {
+        const intBonus = unit.advantage.statMods.intelligence;
+        unit.magicDamage += intBonus * 2;
+        unit.stats.magicDamage = (unit.stats.magicDamage || 0) + intBonus * 2;
+        unit.maxMp += intBonus * 2;
+      }
+      if (unit.advantage.statMods.wisdom) {
+        const wisBonus = unit.advantage.statMods.wisdom;
+        unit.magicResistance += wisBonus;
+        unit.stats.magicResistance = (unit.stats.magicResistance || 0) + wisBonus;
+      }
+      if (unit.advantage.statMods.dexterity) {
+        const dexBonus = unit.advantage.statMods.dexterity;
+        unit.stats.accuracy = (unit.stats.accuracy || 80) + dexBonus * 2;
+        unit.critBonus = (unit.critBonus || 0) + dexBonus;
+      }
+      if (unit.advantage.statMods.perception) {
+        const perBonus = unit.advantage.statMods.perception;
+        unit.stats.accuracy = (unit.stats.accuracy || 80) + perBonus * 2;
+        unit.critBonus = (unit.critBonus || 0) + perBonus;
+      }
+      if (unit.advantage.statMods.resolve) {
+        const resBonus = unit.advantage.statMods.resolve;
+        unit.magicResistance += resBonus;
+        unit.stats.magicResistance = (unit.stats.magicResistance || 0) + resBonus;
+      }
+      if (unit.advantage.statMods.luck) {
+        const lckBonus = unit.advantage.statMods.luck;
+        unit.critBonus = (unit.critBonus || 0) + lckBonus * 2;
+        unit.dodge = (unit.dodge || 0) + lckBonus;
+        unit.stats.dodge = (unit.stats.dodge || 0) + lckBonus;
+      }
+    }
+    if (unit.advantage.combatMod) {
+      const cm = unit.advantage.combatMod;
+      if (cm.hpBonus) {
+        unit.maxHp += cm.hpBonus;
+        if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += cm.hpBonus;
+      }
+      if (cm.mpBonus) unit.maxMp += cm.mpBonus;
+      if (cm.accuracy) unit.stats.accuracy = (unit.stats.accuracy || 80) + cm.accuracy;
+      if (cm.crit) unit.critBonus = (unit.critBonus || 0) + cm.crit;
+      if (cm.speed) {
+        unit.speed += cm.speed;
+        unit.stats.speed = (unit.stats.speed || 15) + cm.speed;
+      }
+      if (cm.dodge) {
+        unit.dodge = (unit.dodge || 0) + cm.dodge;
+        unit.stats.dodge = (unit.stats.dodge || 0) + cm.dodge;
+      }
+      if (cm.physicalDamage) unit.stats.physicalDamage = (unit.stats.physicalDamage || 0) + cm.physicalDamage;
+      if (cm.magicDamage) {
+        unit.magicDamage += cm.magicDamage;
+        unit.stats.magicDamage = (unit.stats.magicDamage || 0) + cm.magicDamage;
+      }
+      if (cm.magicResistance) {
+        unit.magicResistance += cm.magicResistance;
+        unit.stats.magicResistance = (unit.stats.magicResistance || 0) + cm.magicResistance;
+      }
+      if (cm.defense) {
+        unit.armor += cm.defense;
+        unit.stats.armor = (unit.stats.armor || 0) + cm.defense;
+      }
+      if (cm.moveBonus) {
+        unit.move += cm.moveBonus;
+        unit.moveRange += cm.moveBonus;
+      }
+      if (cm.regenPerTurn) {
+        unit.regenPerTurn = (unit.regenPerTurn || 0) + cm.regenPerTurn;
+      }
+    }
+  }
+
+  if (unit.disadvantage && unit.disadvantage.statMods) {
+    for (const [st, val] of Object.entries(unit.disadvantage.statMods)) {
+      if (val < 0) {
+        if (st === 'vitality') {
+          unit.maxHp = Math.max(20, unit.maxHp + val * 3);
+          if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth = Math.max(20, unit.stats.maxHealth + val * 3);
+        } else if (st === 'agility') {
+          unit.speed = Math.max(5, unit.speed + val);
+          unit.stats.speed = Math.max(5, (unit.stats.speed || 15) + val);
+          unit.dodge = Math.max(0, (unit.dodge || 0) + val);
+          unit.stats.dodge = Math.max(0, (unit.stats.dodge || 0) + val);
+        } else if (st === 'perception') {
+          unit.stats.accuracy = Math.max(30, (unit.stats.accuracy || 80) + val * 2);
+        } else if (st === 'luck') {
+          unit.critBonus = Math.max(0, (unit.critBonus || 0) + val);
+        } else if (st === 'strength') {
+          unit.stats.physicalDamage = Math.max(5, (unit.stats.physicalDamage || 10) + val);
+        } else if (st === 'intelligence') {
+          unit.magicDamage = Math.max(0, unit.magicDamage + val);
+          unit.stats.magicDamage = Math.max(0, (unit.stats.magicDamage || 0) + val);
+        } else if (st === 'resolve' || st === 'wisdom') {
+          unit.magicResistance = Math.max(0, unit.magicResistance + val);
+          unit.stats.magicResistance = Math.max(0, (unit.stats.magicResistance || 0) + val);
+        }
+      }
+    }
+  }
+
+  if (unit.talent && unit.talent.stats) {
+    const ts = unit.talent.stats;
+    if (ts.hpBonus) {
+      unit.maxHp += ts.hpBonus;
+      if (unit.stats.maxHealth !== undefined) unit.stats.maxHealth += ts.hpBonus;
+    }
+    if (ts.mpBonus) unit.maxMp += ts.mpBonus;
+    if (ts.armor) {
+      unit.armor += ts.armor;
+      unit.stats.armor = (unit.stats.armor || 0) + ts.armor;
+    }
+    if (ts.magicResistance) {
+      unit.magicResistance += ts.magicResistance;
+      unit.stats.magicResistance = (unit.stats.magicResistance || 0) + ts.magicResistance;
+    }
+    if (ts.physicalDamage) {
+      unit.stats.physicalDamage = (unit.stats.physicalDamage || 0) + ts.physicalDamage;
+    }
+    if (ts.magicDamage) {
+      unit.magicDamage += ts.magicDamage;
+      unit.stats.magicDamage = (unit.stats.magicDamage || 0) + ts.magicDamage;
+    }
+    if (ts.speed) {
+      unit.speed += ts.speed;
+      unit.stats.speed = (unit.stats.speed || 15) + ts.speed;
+    }
+    if (ts.dodge) {
+      unit.dodge = (unit.dodge || 0) + ts.dodge;
+      unit.stats.dodge = (unit.stats.dodge || 0) + ts.dodge;
+    }
+    if (ts.accuracy) {
+      unit.stats.accuracy = (unit.stats.accuracy || 80) + ts.accuracy;
+    }
+    if (ts.critBonus) {
+      unit.critBonus = (unit.critBonus || 0) + ts.critBonus;
+    }
+    if (ts.blockChance) {
+      unit.blockChance = (unit.blockChance || 0) + ts.blockChance;
+      unit.stats.blockChance = unit.blockChance;
+    }
+    if (ts.lifesteal) {
+      unit.lifesteal = (unit.lifesteal || 0) + ts.lifesteal;
+    }
+    if (ts.moveBonus) {
+      unit.move += ts.moveBonus;
+      unit.moveRange += ts.moveBonus;
+    }
+  }
+
   unit.hp = wasFullHp ? unit.maxHp : Math.min(unit.hp ?? unit.maxHp, unit.maxHp);
   unit.mp = wasFullMp ? unit.maxMp : Math.min(unit.mp ?? unit.maxMp, unit.maxMp);
 }
@@ -1789,6 +2616,7 @@ export function rerollSingleUnitWithSeed(unit, customSeedStr) {
     slotCount: 8
   };
 
+  populateUnitBirthCertificate(unit);
   recalculateEquipmentStats(unit);
   return unit;
 }
@@ -2155,6 +2983,7 @@ export async function generateClanRoster(baseSeed, board, options = {}) {
       rawCharacter: charData
     };
 
+    populateUnitBirthCertificate(unit);
     recalculateEquipmentStats(unit);
     units.push(unit);
   }
@@ -2281,6 +3110,7 @@ export function rollRaidBoss(seed, board = null, pos = { x: 8, z: 7 }) {
   };
 
   normalizeEquipment(boss.equipment, normalizedSeed, className, weaponSpec, 'S');
+  populateUnitBirthCertificate(boss);
   recalculateEquipmentStats(boss);
   return boss;
 }
@@ -2390,6 +3220,7 @@ export function rollGauntletFloorEnemies(seed, floor = 1, board = null) {
           slotCount: 8
         }
       };
+      populateUnitBirthCertificate(guard);
       recalculateEquipmentStats(guard);
       enemies.push(guard);
     }
@@ -2479,6 +3310,7 @@ export function rollGauntletFloorEnemies(seed, floor = 1, board = null) {
           slotCount: 8
         }
       };
+      populateUnitBirthCertificate(enemy);
       recalculateEquipmentStats(enemy);
       enemies.push(enemy);
     }
