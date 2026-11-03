@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createWaterSwell, createWaterRipples, sampleWaterField } from '@engine/debug/water-simulation';
+import { createMarbleBake, createMarbleMaterial } from '@engine/debug/marble-material';
 
 export const BOARD_SIZE = 10;
 export const TILE_SIZE = 24;
@@ -15,6 +16,158 @@ function createMulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+const WATER_VERTEX_SHADER = /* glsl */ `
+  uniform float uTime;
+  uniform sampler2D uSwellTex;
+  uniform sampler2D uRippleTex;
+
+  varying vec3 vWorld;
+  varying vec2 vUv;
+  varying vec2 vSwellUv;
+  varying vec2 vRippleUv;
+
+  void main() {
+    vUv = uv;
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    // River domain X: [-120, 120] (domain 240), Z: [-24, 24] (domain 48)
+    vSwellUv = (world.xz + 120.0) / 240.0;
+    vRippleUv = (world.xz + 120.0) / 240.0;
+
+    vWorld = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+const WATER_FRAGMENT_SHADER = /* glsl */ `
+  precision highp float;
+
+  uniform sampler2D uSwellTex;
+  uniform sampler2D uRippleTex;
+  uniform float uTime;
+  uniform float uOpacity;
+
+  uniform vec3 sunDirection;
+  uniform vec3 sunColor;
+  uniform vec3 seabedColor;
+  uniform vec3 skyHorizonColor;
+  uniform vec3 skyZenithColor;
+  uniform vec3 foamColor;
+  uniform vec3 foamShadeColor;
+
+  varying vec3 vWorld;
+  varying vec2 vUv;
+  varying vec2 vSwellUv;
+  varying vec2 vRippleUv;
+
+  const vec2 WIND = normalize(vec2(1.0, 0.55));
+  const float CAUSTIC_SPREAD = 0.0011;
+  const vec3 ABSORPTION = vec3(0.058, 0.0115, 0.0072);
+  const float REFRACTION = 0.75;
+  const float FOAM_LACE_SCALE = 0.62;
+  const float FOAM_DRIFT = 0.55;
+
+  float hash(vec2 cell) {
+    return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+  }
+
+  float softNoise(vec2 point) {
+    vec2 cell = floor(point);
+    vec2 f = point - cell;
+    vec2 s = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    return mix(mix(hash(cell), hash(cell + vec2(1.0, 0.0)), s.x), mix(hash(cell + vec2(0.0, 1.0)), hash(cell + vec2(1.0, 1.0)), s.x), s.y);
+  }
+
+  // Procedure drifting lace foam: creases of smooth noise warped by more noise
+  float lace(vec2 point) {
+    vec2 drift = WIND * uTime * FOAM_DRIFT;
+    vec2 warp = vec2(softNoise(point * 0.5 + drift * 0.3), softNoise(point * 0.5 - drift * 0.3 + 19.0)) * 2.6;
+    float broad = 1.0 - abs(2.0 * softNoise(point + warp + drift) - 1.0);
+    float fine = 1.0 - abs(2.0 * softNoise(point * 2.3 - warp - drift * 1.4 + 7.0) - 1.0);
+    return broad * broad * (0.62 + 0.38 * fine);
+  }
+
+  // Smooth sinusoidal shimmer ripples
+  vec2 shimmer(vec2 point) {
+    vec2 a = point * 0.5 + WIND * uTime * 1.1;
+    vec2 b = vec2(-point.y, point.x) * 0.85 - WIND.yx * uTime * 1.5;
+    return vec2(cos(a.x + 0.6 * a.y) + 0.6 * cos(b.x - 0.4 * b.y), cos(a.y - 0.6 * a.x) + 0.6 * cos(b.y + 0.4 * b.x)) * 0.025;
+  }
+
+  // Procedural caustic light intensity at a seabed coordinate
+  float sampleCaustic(vec2 p) {
+    vec2 p1 = p * 0.35 + vec2(uTime * 0.35, uTime * 0.22);
+    vec2 p2 = p * 0.48 - vec2(uTime * 0.28, uTime * 0.32);
+    float c1 = sin(p1.x + sin(p1.y * 1.5)) * cos(p1.y + cos(p1.x * 1.5));
+    float c2 = sin(p2.x * 1.35 - sin(p2.y * 1.25)) * cos(p2.y * 1.35 - cos(p2.x * 1.25));
+    return pow(0.5 + 0.5 * (c1 + c2) * 0.5, 3.2) * 3.5;
+  }
+
+  void main() {
+    vec4 swellData = texture2D(uSwellTex, vSwellUv);
+    vec4 rippleData = texture2D(uRippleTex, vRippleUv);
+
+    // Surface slope and normal
+    vec2 slope = swellData.gb * 0.55 + rippleData.gb * 1.4 + shimmer(vWorld.xz);
+    vec3 normal = normalize(vec3(-slope.x, 1.0, -slope.y));
+
+    vec3 view = normalize(cameraPosition - vWorld);
+    float viewDotNormal = max(dot(normal, view), 0.0);
+    float fresnel = 0.02 + 0.98 * pow(1.0 - viewDotNormal, 5.0);
+
+    // Refracted ray onto sandy riverbed
+    vec3 ray = refract(-view, normal, REFRACTION);
+    float depth = 12.0 + 3.0 * (sin(vWorld.x * 0.025 + 1.1) * sin(vWorld.z * 0.035 - 0.4));
+    float path = (depth + swellData.r + rippleData.r) / max(-ray.y, 0.2);
+    vec2 bed = vWorld.xz + ray.xz * path;
+
+    // Sunlight refraction caustics with CAUSTIC_SPREAD RGB chromatic fringe
+    vec2 fringe = vec2(CAUSTIC_SPREAD, -CAUSTIC_SPREAD * 0.6) * 150.0;
+    vec3 caustics = vec3(
+      sampleCaustic(bed - fringe),
+      sampleCaustic(bed),
+      sampleCaustic(bed + fringe)
+    );
+    vec3 seabed = seabedColor * (0.82 + 0.22 * caustics * sqrt(max(caustics, vec3(0.0))));
+
+    // Beer-Lambert depth absorption
+    vec3 waterColor = seabed * exp(-ABSORPTION * path);
+
+    // Fresnel sky reflection
+    vec3 reflected = reflect(-view, normal);
+    vec3 sky = mix(skyHorizonColor, skyZenithColor, clamp(reflected.y, 0.0, 1.0));
+    vec3 color = mix(waterColor, sky, fresnel);
+
+    // Specular sun glint
+    vec3 halfway = normalize(sunDirection + view);
+    float toSun = max(dot(normal, halfway), 0.0);
+    color += sunColor * (pow(toSun, 1400.0) * 0.85 + pow(toSun, 90.0) * 0.06);
+
+    // Procedural drifting lace() foam:
+    // Brightens along:
+    // 1. Riverbanks (stream boundary near abs(z) ~ 24)
+    float bankCoverage = smoothstep(14.0, 23.5, abs(vWorld.z));
+    // 2. Bridge posts (columns around x ~ -12 and +12)
+    float bridgeDist = min(abs(vWorld.x - 12.0), abs(vWorld.x + 12.0));
+    float bridgeCoverage = (1.0 - smoothstep(0.0, 5.5, bridgeDist)) * (1.0 - smoothstep(18.0, 24.0, abs(vWorld.z)));
+    // 3. Active water ripples
+    float rippleCoverage = smoothstep(0.02, 0.5, rippleData.a) * 1.2 + abs(rippleData.r) * 0.8;
+
+    float coverage = max(max(bankCoverage, bridgeCoverage), max(rippleCoverage, smoothstep(0.7, 1.0, swellData.a) * 0.4));
+
+    if (coverage > 0.004) {
+      float strands = lace(vWorld.xz * FOAM_LACE_SCALE);
+      float edge = max(fwidth(strands), 0.05);
+      float threshold = 1.0 - 0.86 * coverage;
+      float foam = smoothstep(threshold - edge, threshold + edge, strands) * smoothstep(0.12, 0.35, coverage);
+      float thick = smoothstep(0.45, 1.0, coverage);
+      color *= 1.0 - 0.1 * coverage;
+      color = mix(color, mix(foamShadeColor, foamColor, 0.45 + 0.55 * max(thick, strands)), foam * (0.75 + 0.25 * thick));
+    }
+
+    gl_FragColor = vec4(color, uOpacity);
+  }
+`;
 
 export class IsometricBoard {
   /**
@@ -33,6 +186,14 @@ export class IsometricBoard {
     this.raycaster = new THREE.Raycaster();
     this.unitActorManager = null;
 
+    // Veined marble bake & material
+    this.marbleBake = null;
+    this.veinedMarbleMaterial = null;
+
+    // Battlefield Rune Switches
+    this.runeSwitches = new Map();
+    this.floodgateRaised = false;
+
     // Material definitions
     this.materials = this._createMaterials();
 
@@ -47,6 +208,9 @@ export class IsometricBoard {
 
     // Setup FFT water swell, ripples, and surface mesh
     this._initWaterSimulation(seed);
+
+    // Setup 3D battlefield rune switches
+    this._initRuneSwitches();
   }
 
   _createMaterials() {
@@ -91,6 +255,34 @@ export class IsometricBoard {
     });
 
     return { columnSide, grass, stone, bridge, water, ruin };
+  }
+
+  /**
+   * Initializes GPU-baked 3D world-space veined white marble texture and applies to bridge/ruin/stone.
+   * @param {THREE.WebGLRenderer} renderer
+   */
+  initMarbleBake(renderer) {
+    if (!renderer) return;
+    if (this.marbleBake) {
+      this.marbleBake.dispose();
+    }
+    this.marbleBake = createMarbleBake(renderer);
+    this.marbleBake.bake();
+
+    this.veinedMarbleMaterial = createMarbleMaterial();
+    this.veinedMarbleMaterial.uniforms.stone.value = this.marbleBake.texture;
+
+    this.materials.bridge = this.veinedMarbleMaterial;
+    this.materials.ruin = this.veinedMarbleMaterial;
+
+    for (const mesh of this.interactiveMeshes) {
+      const tile = mesh.userData?.tile;
+      if (tile && (tile.terrain === 'bridge' || tile.terrain === 'ruin')) {
+        if (Array.isArray(mesh.material)) {
+          mesh.material[2] = this.veinedMarbleMaterial;
+        }
+      }
+    }
   }
 
   _generateTerrain(seed) {
@@ -371,6 +563,171 @@ export class IsometricBoard {
     this.hoverCursorGroup.add(hoverQuad, hoverBorder, bracketLines);
   }
 
+  _initRuneSwitches() {
+    this.runeSwitches = new Map();
+    const switchDefs = [
+      { x: 4, z: 3 },
+      { x: 5, z: 6 }
+    ];
+
+    for (const def of switchDefs) {
+      const worldPos = this.tileToWorld(def.x, def.z);
+      const group = new THREE.Group();
+      group.name = `RuneSwitch_${def.x}_${def.z}`;
+
+      // 1. Base pedestal
+      const baseGeo = new THREE.CylinderGeometry(2.4, 3.2, 1.2, 8);
+      const baseMat = new THREE.MeshStandardMaterial({
+        color: 0x475569,
+        roughness: 0.5,
+        metalness: 0.6
+      });
+      const base = new THREE.Mesh(baseGeo, baseMat);
+      base.position.y = 0.6;
+      group.add(base);
+
+      // 2. Glowing rune ring on plinth
+      const runeRingGeo = new THREE.RingGeometry(1.6, 2.6, 8);
+      runeRingGeo.rotateX(-Math.PI / 2);
+      const runeRingMat = new THREE.MeshBasicMaterial({
+        color: 0x22d3ee,
+        side: THREE.DoubleSide
+      });
+      const runeRing = new THREE.Mesh(runeRingGeo, runeRingMat);
+      runeRing.position.y = 1.22;
+      group.add(runeRing);
+
+      // 3. Tilting obelisk lever shaft
+      const leverShaft = new THREE.Group();
+      leverShaft.position.set(0, 1.2, 0);
+
+      const shaftGeo = new THREE.ConeGeometry(1.2, 6.5, 6);
+      const shaftMat = new THREE.MeshStandardMaterial({
+        color: 0xf59e0b,
+        emissive: 0xd97706,
+        emissiveIntensity: 0.45,
+        roughness: 0.25,
+        metalness: 0.85
+      });
+      const shaftMesh = new THREE.Mesh(shaftGeo, shaftMat);
+      shaftMesh.position.y = 3.25;
+      leverShaft.add(shaftMesh);
+
+      // 4. Floating glowing crystal diamond on lever apex
+      const crystalGeo = new THREE.OctahedronGeometry(1.4, 0);
+      const crystalMat = new THREE.MeshStandardMaterial({
+        color: 0x22d3ee,
+        emissive: 0x0891b2,
+        emissiveIntensity: 0.8,
+        roughness: 0.1,
+        metalness: 0.9
+      });
+      const crystalMesh = new THREE.Mesh(crystalGeo, crystalMat);
+      crystalMesh.position.y = 7.0;
+      leverShaft.add(crystalMesh);
+
+      group.add(leverShaft);
+      group.position.set(worldPos.x, worldPos.y, worldPos.z);
+      this.boardGroup.add(group);
+
+      const entry = {
+        x: def.x,
+        z: def.z,
+        active: false,
+        mesh: group,
+        leverShaft,
+        crystalMesh
+      };
+      this.runeSwitches.set(`${def.x},${def.z}`, entry);
+    }
+  }
+
+  /**
+   * Returns rune switch object if (x, z) is on or cardinally adjacent to (4, 3) or (5, 6).
+   * @param {number} x
+   * @param {number} z
+   * @returns {{ x: number, z: number, active: boolean }|null}
+   */
+  getAdjacentSwitch(x, z) {
+    for (const sw of this.runeSwitches.values()) {
+      const dist = Math.abs(x - sw.x) + Math.abs(z - sw.z);
+      if (dist <= 1) {
+        return { x: sw.x, z: sw.z, active: sw.active, ...sw };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Toggles the battlefield floodgate rune switch:
+   * toggles this.floodgateRaised, tilts the lever, emits water ripples, and raises/submerges
+   * the ford tiles (2,4), (2,5), (7,4), (7,5).
+   * @param {number} [x]
+   * @param {number} [z]
+   * @returns {boolean}
+   */
+  toggleRuneSwitch(x, z) {
+    this.floodgateRaised = !this.floodgateRaised;
+
+    for (const sw of this.runeSwitches.values()) {
+      sw.active = this.floodgateRaised;
+      if (sw.leverShaft) {
+        sw.leverShaft.rotation.z = this.floodgateRaised ? 0.42 : -0.42;
+      }
+      if (sw.crystalMesh) {
+        sw.crystalMesh.material.color.setHex(this.floodgateRaised ? 0xfbbf24 : 0x22d3ee);
+        sw.crystalMesh.material.emissive.setHex(this.floodgateRaised ? 0xd97706 : 0x0891b2);
+      }
+    }
+
+    // Trigger water ripples across the stream
+    this.triggerWaterRipple(0, 0, 1.5);
+    this.triggerWaterRipple(-48, 0, 1.2);
+    this.triggerWaterRipple(48, 0, 1.2);
+
+    // Toggle ford tiles (2, 4), (2, 5), (7, 4), (7, 5)
+    const fordCoords = [
+      { x: 2, z: 4 },
+      { x: 2, z: 5 },
+      { x: 7, z: 4 },
+      { x: 7, z: 5 }
+    ];
+
+    const bottomY = -ELEVATION_STEP * 2;
+    for (const coord of fordCoords) {
+      const tile = this.getTile(coord.x, coord.z);
+      if (!tile) continue;
+
+      tile.elevation = this.floodgateRaised ? 1 : 0;
+      tile.terrain = this.floodgateRaised ? 'bridge' : 'water';
+      tile.type = tile.terrain;
+      tile.isWater = !this.floodgateRaised;
+      tile.moveCost = this.floodgateRaised ? 1 : 2;
+      tile.passable = true;
+      tile.worldY = tile.elevation * ELEVATION_STEP;
+
+      if (tile.mesh) {
+        const topY = tile.worldY;
+        const height = topY - bottomY;
+        const centerY = (topY + bottomY) / 2;
+
+        tile.mesh.geometry.dispose();
+        tile.mesh.geometry = new THREE.BoxGeometry(TILE_SIZE, height, TILE_SIZE);
+        tile.mesh.position.y = centerY;
+
+        const topMat = this.floodgateRaised
+          ? (this.veinedMarbleMaterial || this.materials.bridge)
+          : this.materials.water;
+
+        if (Array.isArray(tile.mesh.material)) {
+          tile.mesh.material[2] = topMat;
+        }
+      }
+    }
+
+    return this.floodgateRaised;
+  }
+
   /**
    * Get tile data at (x, z).
    * @param {number} x
@@ -451,7 +808,7 @@ export class IsometricBoard {
 
     this.raycaster.setFromCamera({ x: ndcX, y: ndcY }, cam);
 
-    // 1. Raycast against living unit hitboxes / body meshes first so clicking a unit's chest selects their tile
+    // 1. Raycast against living unit hitboxes / body meshes first
     if (manager && manager.units) {
       const unitTargets = [];
       for (const actor of manager.units.values()) {
@@ -511,16 +868,7 @@ export class IsometricBoard {
   }
 
   /**
-   * Direction between two tiles matching Jimmy Lee's coordinate system:
-   * +X (dx > 0, dz === 0) -> 'SE'
-   * +Z (dx === 0, dz > 0) -> 'SW'
-   * -X (dx < 0, dz === 0) -> 'NW'
-   * -Z (dx === 0, dz < 0) -> 'NE'
-   * Diagonals:
-   * dx > 0, dz > 0 -> 'S'
-   * dx < 0, dz > 0 -> 'W'
-   * dx < 0, dz < 0 -> 'N'
-   * dx > 0, dz < 0 -> 'E'
+   * Direction between two tiles matching Jimmy Lee's coordinate system.
    * @param {number} fromX
    * @param {number} fromZ
    * @param {number} toX
@@ -532,20 +880,17 @@ export class IsometricBoard {
     const dz = toZ - fromZ;
     if (dx === 0 && dz === 0) return 'SE';
 
-    // Exact Jimmy Lee cardinal directions
     if (dx > 0 && dz === 0) return 'SE';
     if (dx === 0 && dz > 0) return 'SW';
     if (dx < 0 && dz === 0) return 'NW';
     if (dx === 0 && dz < 0) return 'NE';
 
-    // Diagonals
     if (dx > 0 && dz > 0) return 'S';
     if (dx < 0 && dz > 0) return 'W';
     if (dx < 0 && dz < 0) return 'N';
     if (dx > 0 && dz < 0) return 'E';
 
-    // General angle fallback
-    const deg = (Math.atan2(dz, dx) * 180) / Math.PI; // -180 to 180
+    const deg = (Math.atan2(dz, dx) * 180) / Math.PI;
     if (deg >= -22.5 && deg < 22.5) return 'SE';
     if (deg >= 22.5 && deg < 67.5) return 'S';
     if (deg >= 67.5 && deg < 112.5) return 'SW';
@@ -697,20 +1042,71 @@ export class IsometricBoard {
 
     this.activeWaterRipples = [];
 
+    // Create DataTextures for swell displacement and ripples
+    this.waterSwellTexture = new THREE.DataTexture(
+      this.waterSwell.heightDisplacement,
+      this.waterSwell.size,
+      this.waterSwell.size,
+      THREE.RGBAFormat,
+      THREE.FloatType
+    );
+    this.waterSwellTexture.wrapS = THREE.RepeatWrapping;
+    this.waterSwellTexture.wrapT = THREE.RepeatWrapping;
+    this.waterSwellTexture.minFilter = THREE.LinearFilter;
+    this.waterSwellTexture.magFilter = THREE.LinearFilter;
+    this.waterSwellTexture.needsUpdate = true;
+
+    this.waterRippleTexture = new THREE.DataTexture(
+      this.waterRipples.field,
+      this.waterRipples.size,
+      this.waterRipples.size,
+      THREE.RGBAFormat,
+      THREE.FloatType
+    );
+    this.waterRippleTexture.wrapS = THREE.ClampToEdgeWrapping;
+    this.waterRippleTexture.wrapT = THREE.ClampToEdgeWrapping;
+    this.waterRippleTexture.minFilter = THREE.LinearFilter;
+    this.waterRippleTexture.magFilter = THREE.LinearFilter;
+    this.waterRippleTexture.needsUpdate = true;
+
     // Subdivided water surface plane over the crystal stream channel
     // River spans X: [-120, 120] (width 240), Z: [-24, 24] (width 48), Y: 0.08
     const riverGeo = new THREE.PlaneGeometry(240, 48, 48, 12);
     riverGeo.rotateX(-Math.PI / 2);
 
-    this.waterSurfaceMaterial = new THREE.MeshStandardMaterial({
-      color: 0x06b6d4, // crystal cyan water
-      roughness: 0.1,
-      metalness: 0.35,
+    const waterMaterial = new THREE.ShaderMaterial({
+      vertexShader: WATER_VERTEX_SHADER,
+      fragmentShader: WATER_FRAGMENT_SHADER,
       transparent: true,
-      opacity: 0.85,
       depthWrite: false,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uSwellTex: { value: this.waterSwellTexture },
+        uRippleTex: { value: this.waterRippleTexture },
+        uOpacity: { value: 0.85 },
+        sunDirection: { value: new THREE.Vector3(-0.5, 0.62, 0.42).normalize() },
+        sunColor: { value: new THREE.Color(0xfff4dc) },
+        seabedColor: { value: new THREE.Color(0xfbf6e8) },
+        skyHorizonColor: { value: new THREE.Color(0xe6f6fb) },
+        skyZenithColor: { value: new THREE.Color(0x9fd8f2) },
+        foamColor: { value: new THREE.Color(0xffffff) },
+        foamShadeColor: { value: new THREE.Color(0xc4e4ee) }
+      }
     });
+
+    // Provide .opacity getter/setter wired to uOpacity uniform so existing code accessing .opacity works seamlessly
+    Object.defineProperty(waterMaterial, 'opacity', {
+      get() {
+        return this.uniforms.uOpacity.value;
+      },
+      set(val) {
+        this.uniforms.uOpacity.value = val;
+      },
+      configurable: true
+    });
+
+    this.waterSurfaceMaterial = waterMaterial;
 
     this.waterSurfaceMesh = new THREE.Mesh(riverGeo, this.waterSurfaceMaterial);
     this.waterSurfaceMesh.position.set(0, 0.08, 0);
@@ -730,6 +1126,7 @@ export class IsometricBoard {
     if (this.waterRipples) {
       this.waterRipples.displace(worldX, worldZ, -1.2 * strength);
       this.waterRipples.settle(2.0, 1.5);
+      if (this.waterRippleTexture) this.waterRippleTexture.needsUpdate = true;
     }
 
     const ringGeo = new THREE.RingGeometry(0.8, 2.2, 32);
@@ -767,10 +1164,18 @@ export class IsometricBoard {
     // Step FFT water swell and ripples solver
     if (this.waterSwell) {
       this.waterSwell.update(nowSec);
+      if (this.waterSwellTexture) this.waterSwellTexture.needsUpdate = true;
     }
     if (this.waterRipples) {
       this.waterRipples.settle(1.0, 2.0);
       this.waterRipples.step();
+      if (this.waterRippleTexture) this.waterRippleTexture.needsUpdate = true;
+    }
+
+    // Update water material shader uniforms
+    if (this.waterSurfaceMaterial && this.waterSurfaceMaterial.uniforms?.uTime) {
+      this.waterSurfaceMaterial.uniforms.uTime.value = nowSec;
+      this.waterSurfaceMaterial.opacity = 0.82 + 0.08 * Math.sin(nowSec * 2.5);
     }
 
     // Deform water surface mesh with live wave heights
@@ -794,11 +1199,6 @@ export class IsometricBoard {
       }
       pos.needsUpdate = true;
       this.waterSurfaceMesh.geometry.computeVertexNormals();
-
-      // Living crystal shimmer
-      if (this.waterSurfaceMaterial) {
-        this.waterSurfaceMaterial.opacity = 0.82 + 0.08 * Math.sin(nowSec * 2.5);
-      }
     }
 
     // Animate expanding 3D water ripple rings
@@ -856,6 +1256,15 @@ export class IsometricBoard {
       Object.values(this.materials).forEach((m) => m?.dispose?.());
     }
 
+    if (this.marbleBake) {
+      this.marbleBake.dispose();
+      this.marbleBake = null;
+    }
+    if (this.veinedMarbleMaterial) {
+      this.veinedMarbleMaterial.dispose();
+      this.veinedMarbleMaterial = null;
+    }
+
     if (this.highlightPlaneGeo) {
       this.highlightPlaneGeo.dispose();
     }
@@ -880,6 +1289,15 @@ export class IsometricBoard {
       this.activeWaterRipples = [];
     }
 
+    if (this.waterSwellTexture) {
+      this.waterSwellTexture.dispose();
+      this.waterSwellTexture = null;
+    }
+    if (this.waterRippleTexture) {
+      this.waterRippleTexture.dispose();
+      this.waterRippleTexture = null;
+    }
+
     if (this.waterSurfaceMesh) {
       this.boardGroup.remove(this.waterSurfaceMesh);
       this.waterSurfaceMesh.geometry?.dispose();
@@ -893,6 +1311,7 @@ export class IsometricBoard {
     this.waterSwell = null;
     this.waterRipples = null;
 
+    this.runeSwitches.clear();
     this.interactiveMeshes = [];
     this.tiles = [];
     this.unitActorManager = null;

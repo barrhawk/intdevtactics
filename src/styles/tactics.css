@@ -2382,6 +2382,126 @@ html, body {
   text-overflow: ellipsis;
 }
 
+/* Custom Equipped Highlighting & Stars in 6-Slot Paperdoll */
+.paperdoll-slot.custom-equipped {
+  border: 1px solid var(--border-gold);
+  background: rgba(245, 158, 11, 0.12);
+  box-shadow: 0 0 8px var(--border-gold-glow), inset 0 0 6px rgba(245, 158, 11, 0.15);
+}
+
+.paperdoll-slot.custom-equipped:hover {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: var(--text-gold-bright);
+  box-shadow: 0 0 12px var(--border-gold);
+}
+
+.slot-star-badge {
+  font-size: 8px;
+  font-weight: 800;
+  color: var(--text-gold-bright);
+  background: rgba(245, 158, 11, 0.25);
+  border: 1px solid var(--border-gold);
+  border-radius: 2px;
+  padding: 0 4px;
+  line-height: 1.3;
+}
+
+/* Armory Item Slot Badges */
+.slot-badge {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-mythril);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.slot-badge.slot-tool {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.15);
+}
+
+.slot-badge.slot-offhand {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.15);
+}
+
+.slot-badge.slot-head {
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.4);
+  background: rgba(192, 132, 252, 0.15);
+}
+
+.slot-badge.slot-chest {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.slot-badge.slot-legs {
+  color: #f43f5e;
+  border-color: rgba(244, 63, 94, 0.4);
+  background: rgba(244, 63, 94, 0.15);
+}
+
+.slot-badge.slot-finger {
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(167, 139, 250, 0.15);
+}
+
+/* Physics Inspector Header Button Active State */
+#btn-physics-debug.physics-active {
+  background: rgba(168, 85, 247, 0.25);
+  border-color: #a855f7;
+  color: #e9d5ff;
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.5);
+}
+
+/* FFTA Rune Switch Command Button */
+.cmd-btn.rune-switch-btn {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(245, 158, 11, 0.25));
+  border: 1px solid var(--azure);
+  color: #fef08a;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+  font-weight: 800;
+  animation: runePulse 2.2s infinite ease-in-out;
+}
+
+.cmd-btn.rune-switch-btn:hover {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.35), rgba(245, 158, 11, 0.4));
+  border-color: var(--border-gold);
+  color: #ffffff;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.6);
+}
+
+@keyframes runePulse {
+  0%, 100% {
+    border-color: var(--azure);
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.35);
+  }
+  50% {
+    border-color: var(--border-gold);
+    box-shadow: 0 0 14px rgba(245, 158, 11, 0.6);
+  }
+}
+
+/* Seed Badge Clickable Sharing */
+#hud-seed-badge, #hud-seed-val {
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+#hud-seed-badge:hover {
+  border-color: var(--azure);
+  color: #ffffff;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.35);
+}
+
 /* ==========================================================================
    Responsive Adaptations
    ========================================================================== */

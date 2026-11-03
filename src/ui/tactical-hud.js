@@ -19,9 +19,11 @@ export class TacticalHUD {
    * @param {(deltaDegOrDir: number|string) => void} [callbacks.onRotateCamera]
    * @param {(deltaOrDir: number|string) => void} [callbacks.onZoomCamera]
    * @param {() => void} [callbacks.onToggleAutoBattle]
+   * @param {() => void} [callbacks.onTogglePhysicsDebug]
    * @param {() => void} [callbacks.onToggleRaidBoss]
    * @param {() => void} [callbacks.onNewSeed]
    * @param {() => void} [callbacks.onOpenForge]
+   * @param {(switchInfo: any) => void} [callbacks.onFlipSwitch]
    */
   constructor(containerEl, callbacks = {}) {
     if (!containerEl) {
@@ -39,6 +41,7 @@ export class TacticalHUD {
       autoBattle: false,
       turnNumber: 1,
       raidBossMode: false,
+      physicsDebug: false,
     };
     this.activeUnit = null;
     this.currentMode = 'standby'; // 'standby' | 'menu' | 'move' | 'act' | 'wait' | 'animating'
@@ -76,7 +79,7 @@ export class TacticalHUD {
           <span>INTDEV TACTICS</span>
           <span class="brand-sub">// 3d.internet.dev × set.world</span>
         </div>
-        <div class="seed-badge" id="hud-seed-badge">SEED: 0x1337-TACTICS</div>
+        <div class="seed-badge" id="hud-seed-badge" title="Click to copy shareable ?seed= URL">SEED: <span id="hud-seed-val">0x1337-TACTICS</span></div>
       </div>
       <div class="top-bar-center" id="hud-law-slot"></div>
       <div class="top-bar-right">
@@ -84,6 +87,9 @@ export class TacticalHUD {
           <span class="orb-sparkle">✦</span>
           <span id="hud-orbs-count">450</span> ORBS
         </div>
+        <button class="hud-btn" id="btn-physics-debug" title="Toggle 3d.internet.dev Volumetric Physics Hulls & 6-Layer Inspector">
+          <span id="hud-physics-label">[🔬 PHYSICS HULLS]</span>
+        </button>
         <button class="hud-btn raid-toggle-btn" id="btn-toggle-raid" title="Toggle 250x Set.world Raid Boss Mode">
           <span id="hud-raid-label">[☠ Raid: OFF]</span>
         </button>
@@ -193,6 +199,38 @@ export class TacticalHUD {
 
   _bindEvents() {
     // Top Bar button clicks
+    const btnPhysics = this.elements.topBar.querySelector('#btn-physics-debug');
+    if (btnPhysics) {
+      btnPhysics.addEventListener('click', () => {
+        this.callbacks.onTogglePhysicsDebug?.();
+      });
+    }
+
+    const seedBadge = this.elements.topBar.querySelector('#hud-seed-badge');
+    const seedVal = this.elements.topBar.querySelector('#hud-seed-val');
+    const seedTarget = seedVal || seedBadge;
+    if (seedTarget) {
+      seedTarget.style.cursor = 'pointer';
+      seedTarget.addEventListener('click', async () => {
+        try {
+          const currentSeed = this.headerState.seed || '0x1337-TACTICS';
+          const hexSeed = currentSeed.startsWith('0x') ? currentSeed : `0x${currentSeed}`;
+          const url = new URL(window.location.href);
+          url.searchParams.set('seed', hexSeed);
+          await navigator.clipboard.writeText(url.toString());
+          if (seedVal) {
+            seedVal.textContent = 'COPIED!';
+            setTimeout(() => { seedVal.textContent = this.headerState.seed; }, 1500);
+          } else if (seedBadge) {
+            seedBadge.textContent = 'COPIED!';
+            setTimeout(() => { seedBadge.textContent = `SEED: ${this.headerState.seed}`; }, 1500);
+          }
+        } catch (err) {
+          console.warn('Failed to copy seed URL:', err);
+        }
+      });
+    }
+
     const btnRaid = this.elements.topBar.querySelector('#btn-toggle-raid');
     if (btnRaid) {
       btnRaid.addEventListener('click', () => {
@@ -239,7 +277,11 @@ export class TacticalHUD {
           break;
         case 'F':
           e.preventDefault();
-          this.callbacks.onOpenForge?.();
+          if (this.activeUnit?._adjacentSwitch && this.currentMode === 'menu') {
+            this.callbacks.onFlipSwitch?.(this.activeUnit._adjacentSwitch);
+          } else {
+            this.callbacks.onOpenForge?.();
+          }
           break;
         case 'A':
           e.preventDefault();
@@ -294,13 +336,18 @@ export class TacticalHUD {
      ======================================================================== */
 
   /**
-   * Set Top Bar state (seed, orbs, camera, auto-battle, etc.)
+   * Set Top Bar state (seed, orbs, camera, auto-battle, physicsDebug, etc.)
    */
-  setHeaderState({ seed, orbs, cameraStep, compassLabel, autoBattle, turnNumber, raidBossMode } = {}) {
+  setHeaderState({ seed, orbs, cameraStep, compassLabel, autoBattle, turnNumber, raidBossMode, physicsDebug } = {}) {
     if (seed !== undefined) {
       this.headerState.seed = seed;
       const seedEl = this.container.querySelector('#hud-seed-badge');
-      if (seedEl) seedEl.textContent = `SEED: ${seed}`;
+      const valEl = this.container.querySelector('#hud-seed-val');
+      if (valEl) {
+        valEl.textContent = seed;
+      } else if (seedEl) {
+        seedEl.innerHTML = `SEED: <span id="hud-seed-val">${seed}</span>`;
+      }
     }
     if (orbs !== undefined) {
       this.headerState.orbs = orbs;
@@ -323,6 +370,20 @@ export class TacticalHUD {
         } else {
           autoBtn.classList.remove('active');
           autoLbl.textContent = '[A] Auto: OFF';
+        }
+      }
+    }
+    if (physicsDebug !== undefined) {
+      this.headerState.physicsDebug = physicsDebug;
+      const physBtn = this.container.querySelector('#btn-physics-debug');
+      const physLbl = this.container.querySelector('#hud-physics-label');
+      if (physBtn && physLbl) {
+        if (physicsDebug) {
+          physBtn.classList.add('active', 'physics-active');
+          physLbl.textContent = '🔬 [PHYSICS: ON]';
+        } else {
+          physBtn.classList.remove('active', 'physics-active');
+          physLbl.textContent = '[🔬 PHYSICS HULLS]';
         }
       }
     }
@@ -592,6 +653,12 @@ export class TacticalHUD {
           <span>3. WAIT / END TURN</span>
           <span class="cmd-shortcut">[3]</span>
         </button>
+        ${unit?._adjacentSwitch ? `
+          <button class="cmd-btn rune-switch-btn" id="btn-cmd-flip-switch">
+            <span>⚙️ FLIP RUNE SWITCH</span>
+            <span class="cmd-shortcut">[F]</span>
+          </button>
+        ` : ''}
         <button class="cmd-btn" id="btn-cmd-inspect">
           <span>4. INSPECT SHEET</span>
           <span class="cmd-shortcut">[4]</span>
@@ -619,6 +686,13 @@ export class TacticalHUD {
     const btnWait = menu.querySelector('#btn-cmd-wait');
     if (btnWait) {
       btnWait.addEventListener('click', () => this.callbacks.onOpenWaitCompass?.());
+    }
+
+    const btnFlipSwitch = menu.querySelector('#btn-cmd-flip-switch');
+    if (btnFlipSwitch && unit?._adjacentSwitch) {
+      btnFlipSwitch.addEventListener('click', () => {
+        this.callbacks.onFlipSwitch?.(unit._adjacentSwitch);
+      });
     }
 
     const btnInspect = menu.querySelector('#btn-cmd-inspect');
