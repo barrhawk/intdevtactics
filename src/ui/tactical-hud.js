@@ -6,7 +6,7 @@
  * Command Menu, Combat Forecast Card, Overhead Unit Bars & Damage Popups.
  */
 
-import { getUnitPassive, computeSetWorldResonance } from './forge-modal.js';
+import { getUnitPassive, computeSetWorldResonance, ensureUnitSetWorldData } from './forge-modal.js';
 
 export class TacticalHUD {
   /**
@@ -118,6 +118,9 @@ export class TacticalHUD {
         </button>
         <button class="hud-btn topbar-gauntlet-badge" id="btn-toggle-gauntlet" title="5-Floor Set.world Tower Gauntlet">
           <span id="hud-gauntlet-label">[🏰 GAUNTLET: FL 1/5]</span>
+        </button>
+        <button class="hud-btn" id="btn-stratagems" title="Anima Stratagem Gambit AI Editor [G]">
+          <span>[🧠 STRATAGEMS]</span>
         </button>
         <button class="hud-btn" id="btn-toggle-auto" title="Toggle AI Auto-Battle [A]">
           <span id="hud-auto-label">[A] Auto: OFF</span>
@@ -286,6 +289,13 @@ export class TacticalHUD {
       });
     }
 
+    const btnStratagems = this.elements.topBar.querySelector('#btn-stratagems');
+    if (btnStratagems) {
+      btnStratagems.addEventListener('click', () => {
+        this.callbacks.onOpenStratagems?.();
+      });
+    }
+
     this.elements.topBar.querySelector('#btn-toggle-auto').addEventListener('click', () => {
       this.callbacks.onToggleAutoBattle?.();
     });
@@ -322,6 +332,10 @@ export class TacticalHUD {
           } else {
             this.callbacks.onOpenForge?.();
           }
+          break;
+        case 'G':
+          e.preventDefault();
+          this.callbacks.onOpenStratagems?.();
           break;
         case 'A':
           e.preventDefault();
@@ -659,13 +673,14 @@ export class TacticalHUD {
       `Mythril ${String(rawWepName).charAt(0).toUpperCase() + String(rawWepName).slice(1)}`;
     const orbVal = unit.tool?.orbValue || unit.weapon?.orbValue || unit.orbValue || 125;
 
-    // 5 primary stats
-    const stats = unit.stats || {};
-    const str = stats.str ?? stats.STR ?? stats.physicalDamage ?? 35;
-    const dex = stats.dex ?? stats.DEX ?? stats.accuracy ?? 28;
-    const int = stats.int ?? stats.INT ?? stats.magicDamage ?? 24;
-    const agi = stats.agi ?? stats.AGI ?? (stats.walkSpeed ? Math.round(stats.walkSpeed * 25) : 30);
-    const vit = stats.vit ?? stats.VIT ?? 32;
+    // 9 Set.world base stats
+    ensureUnitSetWorldData(unit);
+    const fs = unit.finalStats || unit.stats || {};
+    const adv = unit.advantage || { name: 'Keen Eye', desc: '+15% Crit chance' };
+    const disadv = unit.disadvantage || { name: 'Honor Bound', desc: 'Lower flank damage' };
+    const tal = unit.talent || { name: 'Aether Conduit', desc: 'Boost MP on crystals', flavor: 'Stars whisper.' };
+    const cert = unit.birthCertificate || { ruleStamp: 'set-world-0-15-8-character-1', contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg' };
+    const seedUrl = `https://set.world/roll/character?seed=${unit.seed || unit.id}`;
 
     const passive = getUnitPassive(unit);
     const resonances = computeSetWorldResonance(unit);
@@ -722,12 +737,27 @@ export class TacticalHUD {
         <div class="card-weapon-orbs">✦ ${orbVal} ORBS</div>
       </div>
 
-      <div class="card-stats-5grid">
-        <div class="stat-pill"><span class="stat-pill-label">STR</span><span class="stat-pill-val">${str}</span></div>
-        <div class="stat-pill"><span class="stat-pill-label">DEX</span><span class="stat-pill-val">${dex}</span></div>
-        <div class="stat-pill"><span class="stat-pill-label">INT</span><span class="stat-pill-val">${int}</span></div>
-        <div class="stat-pill"><span class="stat-pill-label">AGI</span><span class="stat-pill-val">${agi}</span></div>
-        <div class="stat-pill"><span class="stat-pill-label">VIT</span><span class="stat-pill-val">${vit}</span></div>
+      <div class="card-stats-9grid">
+        <div class="stat-pill"><span class="stat-pill-label">STR</span><span class="stat-pill-val">${fs.STR ?? 30}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">DEX</span><span class="stat-pill-val">${fs.DEX ?? 28}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">INT</span><span class="stat-pill-val">${fs.INT ?? 24}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">WIS</span><span class="stat-pill-val">${fs.WIS ?? 22}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">AGI</span><span class="stat-pill-val">${fs.AGI ?? 26}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">VIT</span><span class="stat-pill-val">${fs.VIT ?? 30}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">PER</span><span class="stat-pill-val">${fs.PER ?? 25}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">RES</span><span class="stat-pill-val">${fs.RES ?? 20}</span></div>
+        <div class="stat-pill"><span class="stat-pill-label">LCK</span><span class="stat-pill-val">${fs.LCK ?? 20}</span></div>
+      </div>
+
+      <div class="card-traits-codex">
+        <div class="codex-line adv" title="${adv.desc}">🟢 <strong>${adv.name}:</strong> ${adv.desc}</div>
+        <div class="codex-line dis" title="${disadv.desc}">🟠 <strong>${disadv.name}:</strong> ${disadv.desc}</div>
+        <div class="codex-line tal" title="${tal.flavor || tal.desc}">📖 <strong>${tal.name}</strong> — "${tal.flavor || tal.desc}"</div>
+      </div>
+
+      <div class="card-birth-cert-row">
+        <span>📜 ${cert.ruleStamp || 'set-world-0-15-8-character-1'} (v:${cert.contentVersion || '8.1bmmTgz1B0Y9UKhiu84STg'})</span>
+        <a href="${seedUrl}" target="_blank" rel="noopener noreferrer" class="cert-link-btn" title="View / Roll on Set.world">[🔗 BIRTH CERT]</a>
       </div>
 
       <div class="unit-passive-row" title="${passive.desc}">
@@ -996,12 +1026,14 @@ export class TacticalHUD {
     const toolName = unit.tool?.name || unit.weapon?.name || (weaponModel ? `${weaponModel} Weapon` : (isAzure ? 'Mythril Blade' : 'Dark Iron Blade'));
     const orbVal = unit.tool?.orbValue || unit.weapon?.orbValue || unit.orbValue || (isAzure ? 125 : 80);
 
-    const stats = unit.stats || {};
-    const str = stats.str ?? stats.STR ?? stats.physicalDamage ?? 32;
-    const dex = stats.dex ?? stats.DEX ?? stats.accuracy ?? 26;
-    const int = stats.int ?? stats.INT ?? stats.magicDamage ?? 20;
-    const agi = stats.agi ?? stats.AGI ?? (stats.walkSpeed ? Math.round(stats.walkSpeed * 25) : 28);
-    const vit = stats.vit ?? stats.VIT ?? 30;
+    // 9 Set.world base stats
+    ensureUnitSetWorldData(unit);
+    const fs = unit.finalStats || unit.stats || {};
+    const adv = unit.advantage || { name: 'Keen Eye', desc: '+15% Crit chance' };
+    const disadv = unit.disadvantage || { name: 'Honor Bound', desc: 'Lower flank damage' };
+    const tal = unit.talent || { name: 'Aether Conduit', desc: 'Boost MP on crystals', flavor: 'Stars whisper.' };
+    const cert = unit.birthCertificate || { ruleStamp: 'set-world-0-15-8-character-1', contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg' };
+    const seedUrl = `https://set.world/roll/character?seed=${unit.seed || unit.id}`;
 
     const passive = getUnitPassive(unit);
     const resonances = computeSetWorldResonance(unit);
@@ -1049,12 +1081,27 @@ export class TacticalHUD {
           <div class="card-weapon-orbs">✦ ${orbVal} ORBS</div>
         </div>
 
-        <div class="card-stats-5grid">
-          <div class="stat-pill"><span class="stat-pill-label">STR</span><span class="stat-pill-val">${str}</span></div>
-          <div class="stat-pill"><span class="stat-pill-label">DEX</span><span class="stat-pill-val">${dex}</span></div>
-          <div class="stat-pill"><span class="stat-pill-label">INT</span><span class="stat-pill-val">${int}</span></div>
-          <div class="stat-pill"><span class="stat-pill-label">AGI</span><span class="stat-pill-val">${agi}</span></div>
-          <div class="stat-pill"><span class="stat-pill-label">VIT</span><span class="stat-pill-val">${vit}</span></div>
+        <div class="card-stats-9grid">
+          <div class="stat-pill"><span class="stat-pill-label">STR</span><span class="stat-pill-val">${fs.STR ?? 30}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">DEX</span><span class="stat-pill-val">${fs.DEX ?? 28}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">INT</span><span class="stat-pill-val">${fs.INT ?? 24}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">WIS</span><span class="stat-pill-val">${fs.WIS ?? 22}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">AGI</span><span class="stat-pill-val">${fs.AGI ?? 26}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">VIT</span><span class="stat-pill-val">${fs.VIT ?? 30}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">PER</span><span class="stat-pill-val">${fs.PER ?? 25}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">RES</span><span class="stat-pill-val">${fs.RES ?? 20}</span></div>
+          <div class="stat-pill"><span class="stat-pill-label">LCK</span><span class="stat-pill-val">${fs.LCK ?? 20}</span></div>
+        </div>
+
+        <div class="card-traits-codex">
+          <div class="codex-line adv" title="${adv.desc}">🟢 <strong>${adv.name}:</strong> ${adv.desc}</div>
+          <div class="codex-line dis" title="${disadv.desc}">🟠 <strong>${disadv.name}:</strong> ${disadv.desc}</div>
+          <div class="codex-line tal" title="${tal.flavor || tal.desc}">📖 <strong>${tal.name}</strong> — "${tal.flavor || tal.desc}"</div>
+        </div>
+
+        <div class="card-birth-cert-row">
+          <span>📜 ${cert.ruleStamp || 'set-world-0-15-8-character-1'} (v:${cert.contentVersion || '8.1bmmTgz1B0Y9UKhiu84STg'})</span>
+          <a href="${seedUrl}" target="_blank" rel="noopener noreferrer" class="cert-link-btn" title="View / Roll on Set.world">[🔗 BIRTH CERT]</a>
         </div>
 
         <div class="unit-passive-row" title="${passive.desc}">

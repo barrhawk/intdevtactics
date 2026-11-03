@@ -2,10 +2,10 @@
  * INTDEV TACTICS — Clan Forge & Set.world Armory Modal
  * 3d.internet.dev × set.world
  * 
- * Orb Lottery Forge (/api/craft?orbs=N), 8-Slot Clan Armory Inventory,
- * Salvaging (/api/salvage), Item Boosting (★+1..+5),
- * Signature Class Passives, Set Resonance Badges,
- * Per-Unit Seed Customizer & Provenance JSON Inspector Drawer.
+ * Orb Lottery Forge (/api/craft?orbs=N) & Guarantee Craft (/api/craft?tier=T),
+ * 8-Slot Clan Armory Inventory, Equipment Salvaging (/api/salvage),
+ * Chronological Orb Ledger (/api/drop, /api/salvage, /api/craft),
+ * Full 9-Stat Set.world Birth Certificate, Advantages, Disadvantages & Talents Codex.
  */
 
 import * as SetWorldClient from '../game/setworld-client.js';
@@ -21,6 +21,308 @@ export const EQUIPMENT_SLOTS = SetWorldClient.EQUIPMENT_SLOTS || [
   'neck',
   'finger'
 ];
+
+export const GUARANTEE_CRAFT_COSTS = SetWorldClient.GUARANTEE_CRAFT_COSTS || {
+  F: 15,
+  E: 30,
+  D: 60,
+  C: 120,
+  B: 240,
+  A: 480,
+  S: 900
+};
+
+export const SETWORLD_NINE_STATS = SetWorldClient.SETWORLD_NINE_STATS || [
+  'STR', 'DEX', 'INT', 'WIS', 'AGI', 'VIT', 'PER', 'RES', 'LCK'
+];
+
+export const ADVANTAGES_CATALOG = SetWorldClient.ADVANTAGES_CATALOG || [
+  { id: 'keen_eye', name: 'Keen Eye', desc: '+15% Critical hit chance on flank and back attacks' },
+  { id: 'iron_will', name: 'Iron Will', desc: 'Reduces debuff and status effect durations by 1 turn' },
+  { id: 'nimble_step', name: 'Nimble Step', desc: '+1 Movement and ignore elevation climbing penalties' },
+  { id: 'mana_spring', name: 'Mana Spring', desc: 'Regenerates +5 MP at start of turn' },
+  { id: 'brawler', name: 'Brawler', desc: '+20% Unarmed and tool strike damage' },
+  { id: 'arcane_insight', name: 'Arcane Insight', desc: '+15% Spell casting range and AoE potency' },
+  { id: 'thick_hide', name: 'Thick Hide', desc: '+10 VIT and +15% physical damage resistance' },
+  { id: 'lucky_charm', name: 'Lucky Charm', desc: '+25% Drop rate of high-grade Set.world Orbs' }
+];
+
+export const DISADVANTAGES_CATALOG = SetWorldClient.DISADVANTAGES_CATALOG || [
+  { id: 'honor_bound', name: 'Honor Bound', desc: 'Deals 20% less damage when attacking foes from behind' },
+  { id: 'glass_cannon', name: 'Glass Cannon', desc: '+15% Damage dealt, but takes 15% more damage from all sources' },
+  { id: 'slow_reflexes', name: 'Slow Reflexes', desc: '-10 Speed and takes +10% CT to charge next turn' },
+  { id: 'mana_burnout', name: 'Mana Burnout', desc: 'Spell costs increased by +3 MP' },
+  { id: 'acrophobia', name: 'Acrophobia', desc: 'Suffers -15% Hit rate when standing on tiles height >= 4' },
+  { id: 'clumsy', name: 'Clumsy', desc: '5% Chance to trip and lose remaining movement points' },
+  { id: 'reckless', name: 'Reckless', desc: 'Cannot use Wait defense buff (+0 DEF while resting)' }
+];
+
+export const TALENTS_CODEX = SetWorldClient.TALENTS_CODEX || [
+  { id: 'aether_conduit', name: 'Aether Conduit', desc: 'MP recovery increases when standing on water or crystal stream tiles', flavor: 'The stars whisper through their veins.' },
+  { id: 'vanguard_shield', name: 'Vanguard Shield', desc: 'When adjacent allies are attacked, absorb 20% of their damage', flavor: 'No one falls while I stand.' },
+  { id: 'shadow_dancer', name: 'Shadow Dancer', desc: 'Attacking from stealth or flank refunds 15 CT', flavor: 'Gone before the echo fades.' },
+  { id: 'runic_resonance', name: 'Runic Resonance', desc: 'Weapon material resonance bonuses are doubled', flavor: 'Ancient runes awaken to their touch.' },
+  { id: 'deathmark_instinct', name: 'Deathmark Instinct', desc: 'Deals 30% bonus damage to targets below 30% HP', flavor: 'Scent of blood seals the verdict.' },
+  { id: 'divine_bastion', name: 'Divine Bastion', desc: 'Converts 10% of healing received into a temporary damage barrier', flavor: 'Light protects those who walk the path.' }
+];
+
+/* ========================================================================
+   Orb Ledger Transaction Log Store
+   ======================================================================== */
+
+const globalOrbLedger = [];
+
+export function recordOrbLedgerEntry(entry) {
+  if (typeof SetWorldClient.recordOrbLedgerEntry === 'function') {
+    try {
+      return SetWorldClient.recordOrbLedgerEntry(entry);
+    } catch (_) {}
+  }
+  const item = {
+    id: `ledger-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+    timestamp: Date.now(),
+    ...entry
+  };
+  globalOrbLedger.unshift(item);
+  return item;
+}
+
+export function getOrbLedger() {
+  if (typeof SetWorldClient.getOrbLedger === 'function') {
+    try {
+      return SetWorldClient.getOrbLedger();
+    } catch (_) {}
+  }
+  return globalOrbLedger;
+}
+
+export function clearOrbLedger() {
+  if (typeof SetWorldClient.clearOrbLedger === 'function') {
+    try {
+      return SetWorldClient.clearOrbLedger();
+    } catch (_) {}
+  }
+  globalOrbLedger.length = 0;
+}
+
+/* ========================================================================
+   Guarantee Craft & Salvage Functions
+   ======================================================================== */
+
+export async function craftGuaranteedTier(tier = 'C', slotFilter = 'all', seed = Date.now()) {
+  if (typeof SetWorldClient.craftGuaranteedTier === 'function') {
+    try {
+      const res = await SetWorldClient.craftGuaranteedTier(tier, slotFilter, seed);
+      if (res) return res;
+    } catch (_) {}
+  }
+
+  const cost = GUARANTEE_CRAFT_COSTS[tier] || 120;
+  const targetSlot = (slotFilter && slotFilter !== 'all') ? slotFilter :
+    EQUIPMENT_SLOTS[Math.floor(Math.random() * EQUIPMENT_SLOTS.length)];
+
+  const materialsByTier = {
+    S: ['Star-Metal', 'Celestial Nephrite', 'Sovereign Mythril'],
+    A: ['Adamantite', 'Titanium Mythril', 'Void Obsidian'],
+    B: ['Nephrite', 'Mythril Alloy', 'Dark Steel'],
+    C: ['Mythril', 'Iron Alloy', 'Refined Steel'],
+    D: ['Wrought Iron', 'Bronze Alloy', 'Reinforced Wood'],
+    E: ['Raw Copper', 'Padded Hide', 'Crude Iron'],
+    F: ['Rusted Iron', 'Rough Leather', 'Chipped Stone']
+  };
+  const matList = materialsByTier[tier] || materialsByTier.C;
+  const material = matList[Math.floor(Math.random() * matList.length)];
+
+  const slotNames = {
+    tool: ['Sovereign Blade', 'Celestial Bow', 'Arcane Rod', 'Mythril Dirk'],
+    offhand: ['Aegis Shield', 'Ward Barrier', 'Parrying Buckler', 'Tower Shield'],
+    head: ['Great Helm', 'Astral Crown', 'Visor', 'Circlet of Set'],
+    chest: ['Plate Cuirass', 'Robe of Stars', 'Battle Mail', 'Reinforced Hauberk'],
+    legs: ['Greaves of Valor', 'Iron Chausses', 'Padded Leggings', 'Plate Trousers'],
+    feet: ['Sabatons of Speed', 'Wind Treads', 'Iron Sabatons', 'Starlight Boots'],
+    neck: ['Amulet of Set', 'Pendant of Power', 'Star Torc', 'Medallion of Kings'],
+    finger: ['Band of Heritage', 'Signet of Set', 'Ring of Sovereign', 'Loop of Aegis']
+  };
+  const names = slotNames[targetSlot] || ['Artifact'];
+  const itemName = `${material} ${names[Math.floor(Math.random() * names.length)]}`;
+
+  const bonusPwr = tier === 'S' ? 28 : tier === 'A' ? 20 : tier === 'B' ? 14 : tier === 'C' ? 8 : tier === 'D' ? 4 : 2;
+  const statsBonus = `+${bonusPwr} Power Rating, +${Math.round(bonusPwr * 0.7)} Base Stats`;
+
+  const item = {
+    id: `craft-guarantee-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    name: itemName,
+    type: targetSlot,
+    slot: targetSlot,
+    equippedSlot: targetSlot,
+    grade: tier,
+    tier: tier,
+    tierGrade: tier,
+    orbValue: cost,
+    material: material,
+    elementalPrefix: 'ASTRAL',
+    finishTier: tier === 'S' ? 'Adamantite' : tier === 'A' ? 'Gold' : tier === 'B' ? 'Mythril' : 'Iron',
+    statsBonus: statsBonus,
+    boostStars: 0,
+    equippedTo: null,
+    seed: `guarantee-${seed}`
+  };
+
+  const receipt = {
+    type: 'craft_guarantee',
+    endpoint: `/api/craft?tier=${tier}`,
+    tierGrade: tier,
+    cost: cost,
+    targetSlot: targetSlot,
+    item: item,
+    candidateRolls: 1,
+    provenance: `https://set.world/craft?tier=${tier}&slot=${targetSlot}&seed=${seed}`
+  };
+
+  recordOrbLedgerEntry({
+    type: 'craft_guarantee',
+    endpoint: `/api/craft?tier=${tier}`,
+    timestamp: Date.now(),
+    tier: tier,
+    slot: targetSlot,
+    itemName: item.name,
+    orbsDelta: -cost,
+    seed: seed
+  });
+
+  return { item, receipt, cost };
+}
+
+export function salvageEquipmentItem(item, seed = Date.now()) {
+  if (typeof SetWorldClient.salvageEquipmentItem === 'function') {
+    try {
+      const res = SetWorldClient.salvageEquipmentItem(item, seed);
+      if (res) return res;
+    } catch (_) {}
+  }
+
+  const baseYield = SetWorldClient.salvageItem ? SetWorldClient.salvageItem(item) : 0;
+  const orbVal = item.orbValue || item.rawItem?.orbValue || 25;
+  const yieldOrbs = baseYield > 0 ? baseYield : Math.max(2, Math.floor(orbVal * 0.25));
+
+  const entry = {
+    type: 'salvage',
+    endpoint: '/api/salvage',
+    timestamp: Date.now(),
+    itemId: item.id || `item-salvaged-${Date.now()}`,
+    itemName: item.name || 'Salvaged Equipment',
+    slot: item.equippedSlot || item.slot || normalizeSlot(item),
+    tier: (item.tierGrade || item.tier || item.grade || 'C').toUpperCase(),
+    orbsDelta: +yieldOrbs,
+    seed: seed
+  };
+
+  recordOrbLedgerEntry(entry);
+  return { orbsRecovered: yieldOrbs, orbs: yieldOrbs, receipt: entry };
+}
+
+export function calculateEnemyDropOrbs(fallenUnit, seed = Date.now()) {
+  if (typeof SetWorldClient.calculateEnemyDropOrbs === 'function') {
+    try {
+      const res = SetWorldClient.calculateEnemyDropOrbs(fallenUnit, seed);
+      if (res) return res;
+    } catch (_) {}
+  }
+
+  const stats = fallenUnit?.finalStats || fallenUnit?.stats || {};
+  const sSum = (stats.STR || 30) + (stats.DEX || 30) + (stats.INT || 30) +
+               (stats.WIS || 25) + (stats.AGI || 30) + (stats.VIT || 30) +
+               (stats.PER || 25) + (stats.RES || 20) + (stats.LCK || 20);
+  const isBoss = !!(fallenUnit?.isBoss || (fallenUnit?.rank && fallenUnit?.rank !== 'SOLDIER'));
+  const baseDrop = Math.max(12, Math.floor(sSum / 7));
+  const dropOrbs = isBoss ? baseDrop * 3 : baseDrop;
+
+  const entry = {
+    type: 'drop',
+    endpoint: '/api/drop',
+    timestamp: Date.now(),
+    unitName: fallenUnit?.name || 'Crimson Footsoldier',
+    unitClass: fallenUnit?.job || fallenUnit?.className || 'Warrior',
+    statsVector: {
+      STR: stats.STR || 30,
+      DEX: stats.DEX || 30,
+      INT: stats.INT || 30,
+      WIS: stats.WIS || 25,
+      AGI: stats.AGI || 30,
+      VIT: stats.VIT || 30,
+      PER: stats.PER || 25,
+      RES: stats.RES || 20,
+      LCK: stats.LCK || 20
+    },
+    orbsDelta: +dropOrbs,
+    seed: seed
+  };
+
+  recordOrbLedgerEntry(entry);
+  return { dropOrbs, orbs: dropOrbs, entry };
+}
+
+/* ========================================================================
+   Unit 9-Stat, Advantage, Talent & Birth Certificate Hydration Helper
+   ======================================================================== */
+
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
+}
+
+export function ensureUnitSetWorldData(unit) {
+  if (!unit) return unit;
+
+  if (!unit.finalStats) {
+    const s = unit.stats || {};
+    unit.finalStats = {
+      STR: s.STR ?? s.str ?? s.physicalDamage ?? 32,
+      DEX: s.DEX ?? s.dex ?? s.accuracy ?? 28,
+      INT: s.INT ?? s.int ?? s.magicDamage ?? 24,
+      WIS: s.WIS ?? s.wis ?? 22,
+      AGI: s.AGI ?? s.agi ?? (s.walkSpeed ? Math.round(s.walkSpeed * 25) : 26),
+      VIT: s.VIT ?? s.vit ?? 30,
+      PER: s.PER ?? s.per ?? 25,
+      RES: s.RES ?? s.res ?? 20,
+      LCK: s.LCK ?? s.lck ?? 20
+    };
+  }
+
+  unit.stats = unit.stats || {};
+  Object.assign(unit.stats, unit.finalStats);
+
+  const uKey = unit.id || unit.name || 'unit';
+
+  if (!unit.advantage) {
+    const idx = Math.abs(simpleHash(uKey + '_adv')) % ADVANTAGES_CATALOG.length;
+    unit.advantage = ADVANTAGES_CATALOG[idx] || ADVANTAGES_CATALOG[0];
+  }
+
+  if (!unit.disadvantage) {
+    const idx = Math.abs(simpleHash(uKey + '_dis')) % DISADVANTAGES_CATALOG.length;
+    unit.disadvantage = DISADVANTAGES_CATALOG[idx] || DISADVANTAGES_CATALOG[0];
+  }
+
+  if (!unit.talent) {
+    const idx = Math.abs(simpleHash(uKey + '_tal')) % TALENTS_CODEX.length;
+    unit.talent = TALENTS_CODEX[idx] || TALENTS_CODEX[0];
+  }
+
+  if (!unit.birthCertificate) {
+    unit.birthCertificate = {
+      contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg',
+      ruleStamp: 'set-world-0-15-8-character-1',
+      seed: unit.seed || `tactics-${unit.id || 'unit-0x1'}`
+    };
+  }
+
+  return unit;
+}
 
 export const FALLBACK_CLASS_PASSIVES = {
   Paladin: { name: '⚔️ Shirahadori', desc: 'Blade Catch: 25% chance to deflect melee and counter-attack' },
@@ -59,9 +361,6 @@ export function getUnitPassive(unit) {
   return passives[job] || FALLBACK_CLASS_PASSIVES[job] || { name: '⚔️ Combat Focus', desc: '+10% All Combat Attributes' };
 }
 
-/**
- * Computes active 2pc/4pc/6pc Set.world resonances from unit's equipped gear
- */
 export function computeSetWorldResonance(unit) {
   if (typeof SetWorldClient.computeSetWorldResonance === 'function') {
     try {
@@ -85,7 +384,6 @@ export function computeSetWorldResonance(unit) {
 
   const badges = [];
 
-  // Material set resonance
   for (const [mat, count] of Object.entries(matCounts)) {
     if (count >= 4) {
       badges.push({
@@ -104,14 +402,13 @@ export function computeSetWorldResonance(unit) {
     }
   }
 
-  // Prefix elemental alignment
-  for (const [prefix, count] of Object.entries(prefixCounts)) {
-    if (count >= 2) {
+  for (const [pfx, count] of Object.entries(prefixCounts)) {
+    if (count >= 3) {
       badges.push({
-        name: `🌟 [${prefix.toUpperCase()}] Resonance (2pc)`,
-        desc: `+20 ${prefix === 'Astral' ? 'INT' : prefix === 'Boreal' ? 'AGI' : 'STR'}, Elemental Mastery`,
+        name: `⚡ ${pfx} Attunement (3pc)`,
+        desc: `+25% Elemental Affinity DMG, +15% Status Resistance`,
         count,
-        tier: 2
+        tier: 3
       });
     }
   }
@@ -119,45 +416,50 @@ export function computeSetWorldResonance(unit) {
   return badges;
 }
 
-/**
- * Re-roll unit with custom seed
- */
-export function rerollSingleUnitWithSeed(unit, customSeedStr) {
-  if (typeof SetWorldClient.rerollSingleUnitWithSeed === 'function') {
-    try {
-      return SetWorldClient.rerollSingleUnitWithSeed(unit, customSeedStr);
-    } catch (_) {}
+export function rerollSingleUnitWithSeed(unit, customSeed) {
+  if (!unit) return;
+  const s = String(customSeed).trim();
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(31, h) + s.charCodeAt(i) | 0;
   }
+  h = Math.abs(h);
 
-  // Deterministic local re-roll fallback
-  let hash = 0;
-  for (let i = 0; i < customSeedStr.length; i++) {
-    hash = ((hash << 5) - hash + customSeedStr.charCodeAt(i)) | 0;
-  }
-  const h = Math.abs(hash);
+  const jobs = ['Paladin', 'Knight', 'Warrior', 'Sniper', 'Arcane Mage', 'White Mage', 'Trickster', 'Dragoon'];
+  unit.seed = s;
+  unit.job = jobs[h % jobs.length];
+  unit.className = unit.job;
 
-  const jobs = ['Paladin', 'Knight', 'Sniper', 'Arcane Mage', 'Trickster', 'Samurai', 'Bard', 'Dragoon'];
-  const grades = ['S', 'A', 'B', 'A'];
-  const newJob = jobs[h % jobs.length];
-  const newGrade = grades[h % grades.length];
-  const basePwr = newGrade === 'S' ? 880 : newGrade === 'A' ? 790 : 690;
+  const names = ['Ramza', 'Agrias', 'Delita', 'Mustadio', 'Orlandeau', 'Meliadoul', 'Beowulf', 'Reis', 'Alma', 'Ovelia'];
+  unit.name = names[(h >> 3) % names.length];
 
-  unit.seed = customSeedStr;
-  unit.job = newJob;
-  unit.className = newJob;
-  unit.grade = newGrade;
-  unit.powerRating = basePwr + (h % 50);
+  const grades = ['C', 'B', 'A', 'S'];
+  unit.grade = grades[(h >> 6) % grades.length];
+  unit.powerRating = 500 + (h % 500);
 
-  unit.stats = {
+  unit.finalStats = {
     STR: 25 + (h % 30),
     DEX: 25 + ((h >> 2) % 30),
     INT: 25 + ((h >> 4) % 30),
-    AGI: 25 + ((h >> 6) % 30),
-    VIT: 25 + ((h >> 8) % 30),
-    WIS: 20 + ((h >> 10) % 25),
-    WIL: 20 + ((h >> 12) % 25),
-    LUK: 20 + ((h >> 14) % 25),
-    DEF: 20 + ((h >> 16) % 25),
+    WIS: 20 + ((h >> 6) % 25),
+    AGI: 25 + ((h >> 8) % 30),
+    VIT: 25 + ((h >> 10) % 30),
+    PER: 20 + ((h >> 12) % 25),
+    RES: 20 + ((h >> 14) % 25),
+    LCK: 20 + ((h >> 16) % 25)
+  };
+  unit.stats = { ...unit.finalStats };
+
+  const advIdx = (h >> 5) % ADVANTAGES_CATALOG.length;
+  const disIdx = (h >> 7) % DISADVANTAGES_CATALOG.length;
+  const talIdx = (h >> 9) % TALENTS_CODEX.length;
+  unit.advantage = ADVANTAGES_CATALOG[advIdx];
+  unit.disadvantage = DISADVANTAGES_CATALOG[disIdx];
+  unit.talent = TALENTS_CODEX[talIdx];
+  unit.birthCertificate = {
+    contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg',
+    ruleStamp: 'set-world-0-15-8-character-1',
+    seed: s
   };
 
   unit.passive = getUnitPassive(unit);
@@ -166,10 +468,6 @@ export function rerollSingleUnitWithSeed(unit, customSeedStr) {
   return unit;
 }
 
-/**
- * Normalize an item to one of the 8 paperdoll slots:
- * 'tool', 'offhand', 'head', 'chest', 'legs', 'feet', 'neck', 'finger'
- */
 export function normalizeSlot(item) {
   if (!item) return 'tool';
   if (item.equippedSlot) {
@@ -188,40 +486,23 @@ export function normalizeSlot(item) {
   if (raw === 'neck' || raw === 'amulet' || raw === 'pendant' || raw === 'necklace') return 'neck';
   if (raw === 'finger' || raw === 'ring' || raw === 'band') return 'finger';
 
-  // Keyword detection
-  if (name.includes('boot') || name.includes('sabat') || name.includes('shoe') || name.includes('tread') || name.includes('slipper') || name.includes('footwear')) {
-    return 'feet';
-  }
-  if (name.includes('neck') || name.includes('amulet') || name.includes('pendant') || name.includes('collar') || name.includes('choker') || name.includes('locket') || name.includes('necklace') || name.includes('torc')) {
-    return 'neck';
-  }
-  if (name.includes('ring') || name.includes('band') || name.includes('signet') || name.includes('finger') || name.includes('loop')) {
-    return 'finger';
-  }
-  if (name.includes('greave') || name.includes('legging') || name.includes('trousers') || name.includes('pants') || name.includes('legs')) {
-    return 'legs';
-  }
-  if (name.includes('helm') || name.includes('visor') || name.includes('crown') || name.includes('hood') || name.includes('hat') || name.includes('cap') || name.includes('circlet') || name.includes('head')) {
-    return 'head';
-  }
-  if (name.includes('shield') || name.includes('aegis') || name.includes('buckler') || name.includes('parry') || name.includes('pavise') || name.includes('offhand')) {
-    return 'offhand';
-  }
-  if (name.includes('cuirass') || name.includes('mail') || name.includes('armor') || name.includes('robe') || name.includes('vest') || name.includes('tunic') || name.includes('brigandine') || name.includes('garb') || name.includes('plate') || name.includes('chest') || name.includes('hauberk')) {
-    return 'chest';
-  }
-  if (name.includes('sword') || name.includes('bow') || name.includes('rod') || name.includes('dirk') || name.includes('blade') || name.includes('staff') || name.includes('scepter') || name.includes('spear') || name.includes('axe') || name.includes('dagger') || name.includes('katana') || name.includes('gun') || name.includes('rifle') || name.includes('harp') || name.includes('tome')) {
-    return 'tool';
-  }
+  if (name.includes('boot') || name.includes('sabat') || name.includes('shoe') || name.includes('tread')) return 'feet';
+  if (name.includes('neck') || name.includes('amulet') || name.includes('pendant') || name.includes('torc')) return 'neck';
+  if (name.includes('ring') || name.includes('band') || name.includes('signet') || name.includes('loop')) return 'finger';
+  if (name.includes('greave') || name.includes('legging') || name.includes('trousers') || name.includes('pants')) return 'legs';
+  if (name.includes('helm') || name.includes('visor') || name.includes('crown') || name.includes('circlet')) return 'head';
+  if (name.includes('shield') || name.includes('aegis') || name.includes('buckler') || name.includes('offhand')) return 'offhand';
+  if (name.includes('cuirass') || name.includes('mail') || name.includes('armor') || name.includes('robe') || name.includes('plate')) return 'chest';
 
   return 'tool';
 }
 
 export class ForgeModal {
   /**
-   * @param {HTMLElement} containerEl - Parent container or body to mount modal
+   * @param {HTMLElement} containerEl
    * @param {Object} callbacks
    * @param {(orbs: number) => any} [callbacks.onCraftItem]
+   * @param {(tier: string, slot: string) => any} [callbacks.onGuaranteeCraft]
    * @param {(itemIndex: number, orbsRefunded?: number) => void} [callbacks.onSalvageItem]
    * @param {(itemIndex: number, unitId: string, slot?: string) => void} [callbacks.onEquipItem]
    * @param {(itemIndex: number) => void} [callbacks.onBoostItem]
@@ -232,15 +513,17 @@ export class ForgeModal {
     this.container = containerEl;
     this.callbacks = callbacks;
 
-    this.activeTab = 'lottery'; // 'lottery' | 'armory' | 'roster'
+    this.activeTab = 'lottery'; // 'lottery' | 'armory' | 'roster' | 'ledger'
+    this.craftMode = 'lottery'; // 'lottery' | 'guarantee'
+    this.guaranteeSelectedTier = 'C';
+    this.guaranteeSelectedSlot = 'all';
+
     this.modalEl = null;
     this._isOpen = false;
 
-    // Track provenance drawer open states
     this.openProvenanceUnitIds = new Set();
     this.openProvenanceItemIds = new Set();
 
-    // Default Clan & State
     this.state = {
       orbs: 450,
       inventory: [
@@ -248,135 +531,33 @@ export class ForgeModal {
           id: 'item-init-1',
           name: 'Mythril Broadsword',
           type: 'weapon',
+          equippedSlot: 'tool',
           grade: 'B',
           orbValue: 125,
-          material: 'Mythril Steel',
-          statsBonus: '+12 STR, +4 VIT',
-          equippedTo: 'unit-1',
-          equippedSlot: 'tool',
+          material: 'Mythril Alloy',
+          elementalPrefix: 'BOREAL',
+          finishTier: 'Mythril',
+          statsBonus: '+14 STR, +6 VIT',
+          boostStars: 1,
+          equippedTo: null
         },
         {
           id: 'item-init-2',
-          name: 'Composite Longbow',
-          type: 'weapon',
-          grade: 'B',
-          orbValue: 125,
-          material: 'Ironwood & Mythril',
-          statsBonus: '+14 DEX, +6 AGI',
-          equippedTo: 'unit-2',
-          equippedSlot: 'tool',
-        },
-        {
-          id: 'item-init-3',
-          name: 'Arcane Focus Rod',
-          type: 'weapon',
-          grade: 'A',
-          orbValue: 625,
-          material: 'Starlight Crystal',
-          statsBonus: '+22 INT, +10 WIS',
-          equippedTo: 'unit-3',
-          equippedSlot: 'tool',
-        },
-        {
-          id: 'item-init-4',
-          name: 'Obsidian Dirk',
-          type: 'weapon',
-          grade: 'C',
-          orbValue: 25,
-          material: 'Obsidian Glass',
-          statsBonus: '+6 DEX, +4 LUK',
-          equippedTo: 'unit-4',
-          equippedSlot: 'tool',
-        },
-        {
-          id: 'item-init-5',
-          name: 'Tower Aegis Shield',
-          type: 'armor',
-          grade: 'B',
-          orbValue: 125,
-          material: 'Tempered Mythril',
-          statsBonus: '+18 DEF, +8 VIT',
-          equippedTo: 'unit-1',
+          name: 'Aegis Kite Shield',
+          type: 'shield',
           equippedSlot: 'offhand',
-        },
-        {
-          id: 'item-init-6',
-          name: 'Starlight Sabatons',
-          type: 'armor',
-          grade: 'A',
-          orbValue: 250,
-          material: 'Starlight Silver',
-          statsBonus: '+8 DEF, +12 SPD',
-          equippedTo: 'unit-1',
-          equippedSlot: 'feet',
-        },
-        {
-          id: 'item-init-7',
-          name: 'Amulet of Kings',
-          type: 'accessory',
-          grade: 'S',
-          orbValue: 625,
-          material: 'Adamantine',
-          statsBonus: '+15 WIL, +10 WIS',
-          equippedTo: 'unit-1',
-          equippedSlot: 'neck',
-        },
-      ],
-      clanUnits: [
-        {
-          id: 'unit-1',
-          name: 'Aveline Stalwart',
-          job: 'Paladin',
-          grade: 'S',
-          powerRating: 880,
-          stats: { STR: 46, DEX: 28, INT: 20, AGI: 26, VIT: 48, WIS: 24, WIL: 32, LUK: 18, DEF: 44 },
-          passive: FALLBACK_CLASS_PASSIVES.Paladin,
-          traits: ['Holy Aegis', 'Heavy Armor Master', 'Unwavering Resolve'],
-          equippedTool: 'Mythril Broadsword (✦ 125 Orbs)',
-          equippedArmor: "Knight's Mythril Mail",
-          seed: 'aveline-stalwart-0x1a',
-        },
-        {
-          id: 'unit-2',
-          name: 'Caelen Hawkeye',
-          job: 'Sniper',
-          grade: 'A',
-          powerRating: 790,
-          stats: { STR: 28, DEX: 52, INT: 22, AGI: 46, VIT: 26, WIS: 28, WIL: 24, LUK: 38, DEF: 22 },
-          passive: FALLBACK_CLASS_PASSIVES.Sniper,
-          traits: ['Eagle Eye', 'Critical Precision', 'High-Ground Stance'],
-          equippedTool: 'Composite Longbow (✦ 125 Orbs)',
-          equippedArmor: 'Leather Brigandine',
-          seed: 'caelen-hawkeye-0x2b',
-        },
-        {
-          id: 'unit-3',
-          name: 'Lyra Stardancer',
-          job: 'Arcane Mage',
-          grade: 'A',
-          powerRating: 820,
-          stats: { STR: 18, DEX: 30, INT: 54, AGI: 36, VIT: 24, WIS: 48, WIL: 40, LUK: 26, DEF: 18 },
-          passive: FALLBACK_CLASS_PASSIVES['Arcane Mage'],
-          traits: ['Spell Weaving', 'Mana Overflow', 'Mystic Ward'],
-          equippedTool: 'Arcane Focus Rod (✦ 625 Orbs)',
-          equippedArmor: 'Silk Robes of Focus',
-          seed: 'lyra-stardancer-0x3c',
-        },
-        {
-          id: 'unit-4',
-          name: 'Garrick Shadowstep',
-          job: 'Trickster',
           grade: 'B',
-          powerRating: 690,
-          stats: { STR: 34, DEX: 42, INT: 24, AGI: 50, VIT: 30, WIS: 20, WIL: 22, LUK: 42, DEF: 24 },
-          passive: FALLBACK_CLASS_PASSIVES.Trickster,
-          traits: ['Backstab Specialty', 'Fleet Footed', 'Shadow Camouflage'],
-          equippedTool: 'Obsidian Dirk (✦ 25 Orbs)',
-          equippedArmor: 'Nightshade Garb',
-          seed: 'garrick-shadow-0x4d',
-        },
+          orbValue: 125,
+          material: 'Adamantite',
+          elementalPrefix: 'ASTRAL',
+          finishTier: 'Mythril',
+          statsBonus: '+20 DEF, +100 HP',
+          boostStars: 0,
+          equippedTo: null
+        }
       ],
-      latestReceipt: null,
+      clanUnits: [],
+      latestReceipt: null
     };
 
     this._onKeyDown = (e) => {
@@ -416,7 +597,9 @@ export class ForgeModal {
   updateState(partialState = {}) {
     if (partialState.orbs !== undefined) this.state.orbs = partialState.orbs;
     if (partialState.inventory) this.state.inventory = partialState.inventory;
-    if (partialState.clanUnits) this.state.clanUnits = partialState.clanUnits;
+    if (partialState.clanUnits) {
+      this.state.clanUnits = partialState.clanUnits.map(ensureUnitSetWorldData);
+    }
     if (partialState.latestReceipt) this.state.latestReceipt = partialState.latestReceipt;
 
     if (this._isOpen && this.modalEl) {
@@ -451,13 +634,16 @@ export class ForgeModal {
 
         <nav class="forge-nav-tabs">
           <button class="forge-tab-btn ${this.activeTab === 'lottery' ? 'active' : ''}" data-tab="lottery">
-            ✦ [1] ORB LOTTERY FORGE
+            ✦ [1] ORB FORGE
           </button>
           <button class="forge-tab-btn ${this.activeTab === 'armory' ? 'active' : ''}" data-tab="armory">
             ⚔️ [2] CLAN ARMORY (${this.state.inventory.length})
           </button>
           <button class="forge-tab-btn ${this.activeTab === 'roster' ? 'active' : ''}" data-tab="roster">
-            🛡️ [3] CLAN ROSTER & 8-SLOT PAPERDOLL
+            🛡️ [3] CLAN ROSTER & 9 STATS
+          </button>
+          <button class="forge-tab-btn ${this.activeTab === 'ledger' ? 'active' : ''}" data-tab="ledger">
+            📜 [4] ORB LEDGER
           </button>
         </nav>
 
@@ -483,10 +669,12 @@ export class ForgeModal {
 
     this.container.appendChild(backdrop);
     this.modalEl = backdrop;
+
     this._renderActiveTab();
   }
 
   _renderActiveTab() {
+    if (!this.modalEl) return;
     const content = this.modalEl.querySelector('#forge-tab-content');
     if (!content) return;
     content.innerHTML = '';
@@ -497,15 +685,54 @@ export class ForgeModal {
       this._renderArmoryTab(content);
     } else if (this.activeTab === 'roster') {
       this._renderRosterTab(content);
+    } else if (this.activeTab === 'ledger') {
+      this._renderLedgerTab(content);
     }
   }
 
-  /**
-   * Tab 1: Orb Lottery Forge (/api/craft?orbs=N)
-   */
+  /* ========================================================================
+     Tab 1: Orb Forge (Lottery Craft vs Guarantee Craft Mode Toggle)
+     ======================================================================== */
+
   _renderLotteryTab(container) {
     const currentOrbs = this.state.orbs;
 
+    // Craft Mode Switcher Bar
+    const modeBar = document.createElement('div');
+    modeBar.className = 'forge-mode-toggle-bar';
+    modeBar.innerHTML = `
+      <button class="mode-toggle-btn ${this.craftMode === 'lottery' ? 'active' : ''}" id="btn-mode-lottery">
+        🎲 LOTTERY CRAFT (/api/craft?orbs=)
+      </button>
+      <button class="mode-toggle-btn ${this.craftMode === 'guarantee' ? 'active' : ''}" id="btn-mode-guarantee">
+        👑 GUARANTEE CRAFT (/api/craft?tier=)
+      </button>
+    `;
+
+    modeBar.querySelector('#btn-mode-lottery')?.addEventListener('click', () => {
+      this.craftMode = 'lottery';
+      this._renderActiveTab();
+    });
+
+    modeBar.querySelector('#btn-mode-guarantee')?.addEventListener('click', () => {
+      this.craftMode = 'guarantee';
+      this._renderActiveTab();
+    });
+
+    container.appendChild(modeBar);
+
+    if (this.craftMode === 'lottery') {
+      this._renderLotterySubView(container, currentOrbs);
+    } else {
+      this._renderGuaranteeSubView(container, currentOrbs);
+    }
+
+    if (this.state.latestReceipt) {
+      this._renderReceiptCard(container, this.state.latestReceipt);
+    }
+  }
+
+  _renderLotterySubView(container, currentOrbs) {
     const intro = document.createElement('div');
     intro.className = 'lottery-intro';
     intro.innerHTML = `
@@ -556,7 +783,7 @@ export class ForgeModal {
       </span>
     `;
 
-    customRow.querySelector('#btn-forge-custom').addEventListener('click', () => {
+    customRow.querySelector('#btn-forge-custom')?.addEventListener('click', () => {
       const input = customRow.querySelector('#input-custom-orbs');
       const val = parseInt(input.value, 10);
       if (val >= 10 && val <= currentOrbs) {
@@ -567,10 +794,91 @@ export class ForgeModal {
     });
 
     container.appendChild(customRow);
+  }
 
-    if (this.state.latestReceipt) {
-      this._renderReceiptCard(container, this.state.latestReceipt);
-    }
+  _renderGuaranteeSubView(container, currentOrbs) {
+    const intro = document.createElement('div');
+    intro.className = 'lottery-intro';
+    intro.innerHTML = `
+      Lock in an authentic <strong>Set.world Guaranteed Craft</strong> (<code>/api/craft?tier=T</code>).
+      Select your target Grade and equipment slot. No random lottery variance — guarantees exact tier grade and target slot.
+    `;
+    container.appendChild(intro);
+
+    // Guaranteed Grade Grid
+    const grades = [
+      { tier: 'S', cost: GUARANTEE_CRAFT_COSTS.S, label: 'Grade S Sovereign', desc: 'Max stat multipliers & sovereign finishing' },
+      { tier: 'A', cost: GUARANTEE_CRAFT_COSTS.A, label: 'Grade A Relic', desc: 'Superior mythril/adamantite forging' },
+      { tier: 'B', cost: GUARANTEE_CRAFT_COSTS.B, label: 'Grade B Elite', desc: 'Refined alloy with high resonance' },
+      { tier: 'C', cost: GUARANTEE_CRAFT_COSTS.C, label: 'Grade C Standard', desc: 'Solid battlefield gear' },
+      { tier: 'D', cost: GUARANTEE_CRAFT_COSTS.D, label: 'Grade D Novice', desc: 'Basic ironwork and training tools' },
+      { tier: 'E', cost: GUARANTEE_CRAFT_COSTS.E, label: 'Grade E Crude', desc: 'Raw ore crafting' },
+      { tier: 'F', cost: GUARANTEE_CRAFT_COSTS.F, label: 'Grade F Scraps', desc: 'Makeshift battlefield scrap' }
+    ];
+
+    const guaranteeGrid = document.createElement('div');
+    guaranteeGrid.className = 'guarantee-tiers-grid';
+
+    grades.forEach((g) => {
+      const isSelected = this.guaranteeSelectedTier === g.tier;
+      const canAfford = currentOrbs >= g.cost;
+      const card = document.createElement('div');
+      card.className = `guarantee-tier-card ${isSelected ? 'selected' : ''} ${!canAfford ? 'disabled' : ''}`;
+      card.innerHTML = `
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span class="grade-badge grade-${g.tier.toLowerCase()}">GRADE ${g.tier}</span>
+          <span class="tier-cost">✦ ${g.cost} ORBS</span>
+        </div>
+        <div style="font-weight: 800; font-size: 12px; margin-top: 4px; color: ${isSelected ? 'var(--text-gold)' : '#fff'};">${g.label}</div>
+        <div style="font-size: 9.5px; color: var(--text-muted); margin-top: 2px;">${g.desc}</div>
+      `;
+
+      card.addEventListener('click', () => {
+        this.guaranteeSelectedTier = g.tier;
+        this._renderActiveTab();
+      });
+
+      guaranteeGrid.appendChild(card);
+    });
+
+    container.appendChild(guaranteeGrid);
+
+    // Slot Target Selection Row & Craft Trigger
+    const selectedCost = GUARANTEE_CRAFT_COSTS[this.guaranteeSelectedTier] || 120;
+    const canAffordSelected = currentOrbs >= selectedCost;
+
+    const slotControlRow = document.createElement('div');
+    slotControlRow.className = 'guarantee-slot-control-row';
+    slotControlRow.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 11px; font-weight: 700; color: var(--text-gold);">TARGET SLOT:</span>
+        <select class="guarantee-slot-select" id="select-guarantee-slot">
+          <option value="all" ${this.guaranteeSelectedSlot === 'all' ? 'selected' : ''}>✦ All Slots (Random Roll)</option>
+          <option value="tool" ${this.guaranteeSelectedSlot === 'tool' ? 'selected' : ''}>⚔️ TOOL / WEAPON</option>
+          <option value="offhand" ${this.guaranteeSelectedSlot === 'offhand' ? 'selected' : ''}>🛡️ OFFHAND / SHIELD</option>
+          <option value="head" ${this.guaranteeSelectedSlot === 'head' ? 'selected' : ''}>🪖 HEAD / HELM</option>
+          <option value="chest" ${this.guaranteeSelectedSlot === 'chest' ? 'selected' : ''}>🥋 CHEST / ARMOR</option>
+          <option value="legs" ${this.guaranteeSelectedSlot === 'legs' ? 'selected' : ''}>👖 LEGS / GREAVES</option>
+          <option value="feet" ${this.guaranteeSelectedSlot === 'feet' ? 'selected' : ''}>👢 FEET / SABATONS</option>
+          <option value="neck" ${this.guaranteeSelectedSlot === 'neck' ? 'selected' : ''}>📿 NECK / AMULET</option>
+          <option value="finger" ${this.guaranteeSelectedSlot === 'finger' ? 'selected' : ''}>💍 FINGER / RING</option>
+        </select>
+      </div>
+
+      <button class="hud-btn gold" id="btn-forge-guaranteed" ${!canAffordSelected ? 'disabled' : ''}>
+        👑 FORGE GUARANTEED TIER ${this.guaranteeSelectedTier} (✦ ${selectedCost} ORBS)
+      </button>
+    `;
+
+    slotControlRow.querySelector('#select-guarantee-slot')?.addEventListener('change', (e) => {
+      this.guaranteeSelectedSlot = e.target.value;
+    });
+
+    slotControlRow.querySelector('#btn-forge-guaranteed')?.addEventListener('click', () => {
+      this._handleGuaranteeCraft(this.guaranteeSelectedTier, this.guaranteeSelectedSlot);
+    });
+
+    container.appendChild(slotControlRow);
   }
 
   _renderReceiptCard(container, receipt) {
@@ -597,8 +905,8 @@ export class ForgeModal {
           <div class="receipt-cell-val" style="color: var(--text-gold); font-weight: 800;">[${slot.toUpperCase()}]</div>
         </div>
         <div>
-          <div class="receipt-cell-label">Candidate Rolls</div>
-          <div class="receipt-cell-val">${receipt.candidateRolls || 5} drawn</div>
+          <div class="receipt-cell-label">Endpoint Mode</div>
+          <div class="receipt-cell-val">${receipt.endpoint || (receipt.candidateRolls ? `/api/craft?orbs=` : `/api/craft?tier=${grade}`)}</div>
         </div>
         <div>
           <div class="receipt-cell-label">Material</div>
@@ -607,7 +915,7 @@ export class ForgeModal {
       </div>
 
       <div style="font-size: 11px; color: var(--text-mythril); background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 3px;">
-        Bonuses: <strong>${item.statsBonus || '+12 STR, +5 VIT'}</strong> // Value: <strong>✦ ${receipt.orbValue || item.orbValue} Orbs</strong>
+        Bonuses: <strong>${item.statsBonus || '+12 STR, +5 VIT'}</strong> // Cost: <strong>✦ ${receipt.cost || receipt.orbValue || item.orbValue} Orbs</strong>
       </div>
 
       <div class="receipt-provenance">
@@ -665,8 +973,7 @@ export class ForgeModal {
       const materials = ['Mythril', 'Obsidian Glass', 'Adamantine', 'Dragon Scale', 'Starlight Silver', 'Dark Steel'];
       const material = materials[Math.floor(Math.random() * materials.length)];
 
-      const slotsPool = ['tool', 'offhand', 'head', 'chest', 'legs', 'feet', 'neck', 'finger'];
-      const targetSlot = slotsPool[Math.floor(Math.random() * slotsPool.length)];
+      const targetSlot = EQUIPMENT_SLOTS[Math.floor(Math.random() * EQUIPMENT_SLOTS.length)];
 
       const itemNamesBySlot = {
         tool: [`${material} Broadsword`, `${material} Longbow`, `${material} Arcane Rod`, `${material} Dirk`],
@@ -697,11 +1004,12 @@ export class ForgeModal {
         type: targetSlot,
         equippedSlot: targetSlot,
         grade: grade,
+        tierGrade: grade,
         orbValue: orbs,
         material: material,
         elementalPrefix: prefix,
         statsBonus: statsBonus,
-        equippedTo: null,
+        equippedTo: null
       };
 
       receipt = {
@@ -711,8 +1019,19 @@ export class ForgeModal {
         orbValue: orbs,
         material: material,
         item: forgedItem,
-        provenance: `https://set.world/craft?orbs=${orbs}&seed=tactics-${Date.now()}`,
+        provenance: `https://set.world/craft?orbs=${orbs}&seed=tactics-${Date.now()}`
       };
+
+      recordOrbLedgerEntry({
+        type: 'craft_lottery',
+        endpoint: `/api/craft?orbs=${orbs}`,
+        timestamp: Date.now(),
+        orbsDelta: -orbs,
+        candidateRolls: rollsCount,
+        itemName: forgedItem.name,
+        tier: grade,
+        seed: Date.now()
+      });
 
       this.state.orbs -= orbs;
       this.state.inventory.unshift(forgedItem);
@@ -724,14 +1043,49 @@ export class ForgeModal {
     this._renderActiveTab();
   }
 
-  /**
-   * Tab 2: Clan Armory (Inventory & Salvage with all 8 slots)
-   */
+  async _handleGuaranteeCraft(tier, slot) {
+    const cost = GUARANTEE_CRAFT_COSTS[tier] || 120;
+    if (this.state.orbs < cost) {
+      alert(`Insufficient Orbs: Need ${cost} Orbs for Guaranteed Tier ${tier}.`);
+      return;
+    }
+
+    let craftResult = null;
+    if (this.callbacks.onGuaranteeCraft) {
+      craftResult = await this.callbacks.onGuaranteeCraft(tier, slot);
+    } else {
+      craftResult = await craftGuaranteedTier(tier, slot, Date.now());
+    }
+
+    if (craftResult && craftResult.item) {
+      const item = craftResult.item;
+      const receipt = craftResult.receipt || {
+        endpoint: `/api/craft?tier=${tier}`,
+        tierGrade: tier,
+        cost: cost,
+        item,
+        provenance: `https://set.world/craft?tier=${tier}&slot=${slot}`
+      };
+
+      this.state.orbs = Math.max(0, this.state.orbs - cost);
+      this.state.inventory.unshift(item);
+      this.state.latestReceipt = receipt;
+
+      const orbsEl = this.modalEl?.querySelector('#forge-modal-orbs');
+      if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
+      this._renderActiveTab();
+    }
+  }
+
+  /* ========================================================================
+     Tab 2: Clan Armory (Inventory & Salvage with [♻️ SALVAGE] button)
+     ======================================================================== */
+
   _renderArmoryTab(container) {
     if (this.state.inventory.length === 0) {
       container.innerHTML = `
         <div style="text-align: center; padding: 40px; color: var(--text-muted);">
-          The Clan Armory is currently empty. Visit the <strong>Orb Lottery Forge</strong> to synthesize mythril and 8-slot set equipment!
+          The Clan Armory is currently empty. Visit the <strong>Orb Forge</strong> to synthesize mythril and 8-slot set equipment!
         </div>
       `;
       return;
@@ -741,9 +1095,14 @@ export class ForgeModal {
     grid.className = 'armory-inventory-grid';
 
     this.state.inventory.forEach((item, index) => {
-      const grade = (item.grade || 'B').toUpperCase();
+      const grade = (item.grade || item.tierGrade || 'B').toUpperCase();
       const targetSlot = normalizeSlot(item);
-      const salvageYield = Math.max(1, Math.round((item.orbValue || 25) * 0.1));
+      const isEquipped = !!item.equippedTo;
+
+      // Authentic Set.world salvage computation
+      const baseYield = SetWorldClient.salvageItem ? SetWorldClient.salvageItem(item) : 0;
+      const salvageYield = baseYield > 0 ? baseYield : Math.max(2, Math.round((item.orbValue || 25) * 0.25));
+
       const stars = item.boostStars || item.stars || 0;
       const starsLabel = stars > 0 ? `★ +${stars}` : '★ Base';
       const prefixes = ['BOREAL', 'ASTRAL', 'CHAOTIC', 'CELESTIAL', 'FIERY'];
@@ -765,7 +1124,7 @@ export class ForgeModal {
       const icon = slotIcons[targetSlot] || '⚔️';
 
       const card = document.createElement('div');
-      card.className = 'inventory-item-card';
+      card.className = `inventory-item-card ${isEquipped ? 'is-equipped' : ''}`;
 
       card.innerHTML = `
         <div class="item-card-top">
@@ -775,7 +1134,7 @@ export class ForgeModal {
             <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
             <span class="item-stars-badge">${starsLabel}</span>
           </div>
-          <span style="color: var(--text-gold); font-size: 11px; font-weight: 700;">✦ ${item.orbValue}</span>
+          <span style="color: var(--text-gold); font-size: 11px; font-weight: 700;">✦ ${item.orbValue || 50}</span>
         </div>
 
         <div class="item-card-meta-row">
@@ -795,7 +1154,7 @@ export class ForgeModal {
               .map(
                 (u) =>
                   `<option value="${u.id}" ${item.equippedTo === u.id ? 'selected' : ''}>
-                    ${u.name} [${u.job}] ${item.equippedTo === u.id ? '(EQUIPPED)' : ''}
+                    ${u.name} [${u.job || u.className}] ${item.equippedTo === u.id ? '(EQUIPPED)' : ''}
                   </option>`
               )
               .join('')}
@@ -803,9 +1162,15 @@ export class ForgeModal {
           <button class="btn-boost-item" data-item-idx="${index}" ${stars >= 5 ? 'disabled' : ''}>
             ${stars >= 5 ? '★ MAX (5★)' : '✦ BOOST (75 ORBS)'}
           </button>
-          <button class="btn-salvage" data-item-idx="${index}">
-            ✦ Salvage (+${salvageYield})
-          </button>
+          ${!isEquipped ? `
+            <button class="btn-salvage hud-btn" data-item-idx="${index}" style="border-color: #10b981; color: #6ee7b7;">
+              ♻️ SALVAGE (+${salvageYield} ORBS)
+            </button>
+          ` : `
+            <button class="btn-salvage hud-btn" disabled style="opacity: 0.5;">
+              🔒 EQUIPPED
+            </button>
+          `}
           <button class="btn-provenance-json" data-item-id="${item.id || `item-${index}`}">
             🧬 PROVENANCE
           </button>
@@ -842,14 +1207,14 @@ export class ForgeModal {
 
       // Equip listener
       const select = card.querySelector('.equip-select');
-      select.addEventListener('change', (e) => {
+      select?.addEventListener('change', (e) => {
         const unitId = e.target.value;
         this._handleEquip(index, unitId);
       });
 
       // Salvage listener
-      const btnSalvage = card.querySelector('.btn-salvage');
-      btnSalvage.addEventListener('click', () => {
+      const btnSalvage = card.querySelector('.btn-salvage:not([disabled])');
+      btnSalvage?.addEventListener('click', () => {
         this._handleSalvage(index, salvageYield);
       });
 
@@ -877,7 +1242,6 @@ export class ForgeModal {
 
     const targetSlot = normalizeSlot(item);
 
-    // If equipping to a unit, clear previously equipped item of same slot on that unit
     if (unitId) {
       for (let i = 0; i < this.state.inventory.length; i++) {
         if (i !== itemIndex && this.state.inventory[i].equippedTo === unitId) {
@@ -915,27 +1279,35 @@ export class ForgeModal {
     const item = this.state.inventory[itemIndex];
     if (!item) return;
 
-    if (this.callbacks.onSalvageItem) {
-      this.callbacks.onSalvageItem(itemIndex, yieldOrbs);
-    } else {
-      this.state.inventory.splice(itemIndex, 1);
-      this.state.orbs += yieldOrbs;
-      const orbsEl = this.modalEl?.querySelector('#forge-modal-orbs');
-      if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
-      this._renderActiveTab();
-    }
+    salvageEquipmentItem(item, Date.now());
+
+    this.state.inventory.splice(itemIndex, 1);
+    this.state.orbs += yieldOrbs;
+
+    const orbsEl = this.modalEl?.querySelector('#forge-modal-orbs');
+    if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
+
+    this.callbacks.onSalvageItem?.(itemIndex, yieldOrbs);
+    this._renderActiveTab();
   }
 
-  /**
-   * Tab 3: Clan Roster (All 8 Set.world Slots, Passives, Resonances, Seed Customizer & Provenance)
-   */
+  /* ========================================================================
+     Tab 3: Clan Roster (All 9 Stats, Advantage, Disadvantage, Talent, Birth Cert)
+     ======================================================================== */
+
   _renderRosterTab(container) {
     const grid = document.createElement('div');
     grid.className = 'roster-grid';
 
     this.state.clanUnits.forEach((unit) => {
+      ensureUnitSetWorldData(unit);
+
       const grade = (unit.grade || 'B').toUpperCase();
-      const stats = unit.stats || {};
+      const s = unit.finalStats || unit.stats || {};
+      const adv = unit.advantage || { name: 'Keen Eye', desc: '+15% Crit rate' };
+      const disadv = unit.disadvantage || { name: 'Honor Bound', desc: 'Lower flank damage' };
+      const tal = unit.talent || { name: 'Aether Conduit', desc: 'Boost MP on crystals', flavor: 'Stars whisper.' };
+      const cert = unit.birthCertificate || { ruleStamp: 'set-world-0-15-8-character-1', contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg' };
       const seedUrl = `https://set.world/roll/character?seed=${unit.seed || unit.id}`;
       const eq = unit.equipment || {};
 
@@ -987,7 +1359,7 @@ export class ForgeModal {
         <div class="roster-unit-header">
           <div>
             <div class="roster-unit-name">${unit.name}</div>
-            <div class="roster-unit-class">${unit.job} // PWR ${unit.powerRating || 750}</div>
+            <div class="roster-unit-class">${unit.job || unit.className} // PWR ${unit.powerRating || 750}</div>
           </div>
           <span class="grade-badge grade-${grade.toLowerCase()}">${grade}</span>
         </div>
@@ -1005,17 +1377,24 @@ export class ForgeModal {
           </div>
         ` : ''}
 
-        <!-- 9 Stats Grid -->
+        <!-- Full 9-Stat Base Grid -->
         <div class="roster-9stats-grid">
-          <div class="roster-stat-cell"><span class="stat-lbl">STR</span><span class="stat-num">${stats.STR || 30}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">DEX</span><span class="stat-num">${stats.DEX || 30}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">INT</span><span class="stat-num">${stats.INT || 30}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">AGI</span><span class="stat-num">${stats.AGI || 30}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">VIT</span><span class="stat-num">${stats.VIT || 30}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">WIS</span><span class="stat-num">${stats.WIS || 25}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">WIL</span><span class="stat-num">${stats.WIL || 25}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">LUK</span><span class="stat-num">${stats.LUK || 25}</span></div>
-          <div class="roster-stat-cell"><span class="stat-lbl">DEF</span><span class="stat-num">${stats.DEF || 25}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">STR</span><span class="stat-num">${s.STR ?? 30}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">DEX</span><span class="stat-num">${s.DEX ?? 28}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">INT</span><span class="stat-num">${s.INT ?? 24}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">WIS</span><span class="stat-num">${s.WIS ?? 22}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">AGI</span><span class="stat-num">${s.AGI ?? 26}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">VIT</span><span class="stat-num">${s.VIT ?? 30}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">PER</span><span class="stat-num">${s.PER ?? 25}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">RES</span><span class="stat-num">${s.RES ?? 20}</span></div>
+          <div class="roster-stat-cell"><span class="stat-lbl">LCK</span><span class="stat-num">${s.LCK ?? 20}</span></div>
+        </div>
+
+        <!-- Rolled Advantages, Disadvantages & Talents Codex -->
+        <div class="roster-traits-codex">
+          <div class="trait-codex-row adv">🟢 <strong>${adv.name}:</strong> ${adv.desc}</div>
+          <div class="trait-codex-row dis">🟠 <strong>${disadv.name}:</strong> ${disadv.desc}</div>
+          <div class="trait-codex-row tal">📖 <strong>${tal.name}</strong> — "${tal.flavor || tal.desc}"</div>
         </div>
 
         <!-- 8-Slot Paperdoll Section -->
@@ -1025,20 +1404,30 @@ export class ForgeModal {
             <span class="paperdoll-sub">PROVENANCE INSPECTOR</span>
           </div>
           <div class="paperdoll-8grid">
-            ${formatSlot('tool', '⚔️', unit.equippedTool || `${unit.job} Weapon`)}
-            ${formatSlot('offhand', '🛡️', `${unit.job === 'Knight' ? 'Kite Shield' : unit.job === 'Paladin' ? 'Aegis Shield' : 'Ward Focus'}`)}
-            ${formatSlot('head', '🪖', `${unit.job} Helm`)}
+            ${formatSlot('tool', '⚔️', unit.equippedTool || `${unit.job || unit.className} Weapon`)}
+            ${formatSlot('offhand', '🛡️', `${(unit.job || unit.className) === 'Knight' ? 'Kite Shield' : (unit.job || unit.className) === 'Paladin' ? 'Aegis Shield' : 'Ward Focus'}`)}
+            ${formatSlot('head', '🪖', `${unit.job || unit.className} Helm`)}
             ${formatSlot('chest', '🥋', unit.equippedArmor || 'Azure Clan Mail')}
-            ${formatSlot('legs', '👖', `${unit.job} Greaves`)}
-            ${formatSlot('feet', '👢', `${unit.job} Sabatons`)}
+            ${formatSlot('legs', '👖', `${unit.job || unit.className} Greaves`)}
+            ${formatSlot('feet', '👢', `${unit.job || unit.className} Sabatons`)}
             ${formatSlot('neck', '📿', 'Amulet of Set')}
             ${formatSlot('finger', '💍', 'Band of Heritage')}
           </div>
         </div>
 
-        <!-- Traits Row -->
-        <div class="roster-traits-row">
-          ${(unit.traits || []).map((t) => `<span class="trait-chip">✦ ${t}</span>`).join('')}
+        <!-- Set.world Birth Certificate Stamp & Provenance Drawer -->
+        <div class="roster-birth-cert-box">
+          <div class="birth-cert-header">
+            <span>📜 STAMP: <strong>${cert.ruleStamp || 'set-world-0-15-8-character-1'}</strong></span>
+            <span>v: ${cert.contentVersion || '8.1bmmTgz1B0Y9UKhiu84STg'}</span>
+          </div>
+          <div class="birth-cert-actions">
+            <a href="${seedUrl}" target="_blank" rel="noopener noreferrer" class="btn-cert-link">🔗 SET.WORLD BIRTH</a>
+            <button class="hud-btn btn-copy-seed-url" data-url="${seedUrl}">📋 COPY LINK</button>
+            <button class="btn-provenance-json" data-unit-id="${unit.id}">
+              🧬 ${isProvOpen ? 'HIDE JSON' : 'PROVENANCE JSON'}
+            </button>
+          </div>
         </div>
 
         <!-- Per-Unit Seed Customizer -->
@@ -1048,34 +1437,28 @@ export class ForgeModal {
           <button class="btn-reroll-seed" data-unit-id="${unit.id}">RE-ROLL UNIT</button>
         </div>
 
-        <!-- Provenance Drawer Toggle -->
-        <div class="provenance-drawer-toggle">
-          <div class="roster-seed-link">
-            Birth: <a href="${seedUrl}" target="_blank" rel="noopener noreferrer">${seedUrl}</a>
-          </div>
-          <button class="btn-provenance-json" data-unit-id="${unit.id}">
-            🧬 ${isProvOpen ? 'HIDE JSON' : 'PROVENANCE JSON'}
-          </button>
-        </div>
-
         ${isProvOpen ? `
           <div class="provenance-json-content">
             ${JSON.stringify({
               seed: unit.seed || unit.id,
               name: unit.name,
-              class: unit.job,
+              class: unit.job || unit.className,
               grade: grade,
               powerRating: unit.powerRating || 750,
-              stats: unit.stats,
+              finalStats: unit.finalStats,
+              advantage: unit.advantage,
+              disadvantage: unit.disadvantage,
+              talent: unit.talent,
+              birthCertificate: unit.birthCertificate,
               passive: passive,
               resonances: resonances.map(r => r.name),
               equipment: {
                 tool: eq.tool || unit.equippedTool,
                 offhand: eq.offhand || 'Shield/Focus',
-                head: eq.head || `${unit.job} Helm`,
+                head: eq.head || `${unit.job || unit.className} Helm`,
                 chest: eq.chest || unit.equippedArmor,
-                legs: eq.legs || `${unit.job} Greaves`,
-                feet: eq.feet || `${unit.job} Sabatons`,
+                legs: eq.legs || `${unit.job || unit.className} Greaves`,
+                feet: eq.feet || `${unit.job || unit.className} Sabatons`,
                 neck: eq.neck || 'Amulet of Set',
                 finger: eq.finger || 'Band of Heritage'
               },
@@ -1084,6 +1467,17 @@ export class ForgeModal {
           </div>
         ` : ''}
       `;
+
+      // Copy link listener
+      card.querySelector('.btn-copy-seed-url')?.addEventListener('click', async (e) => {
+        const url = e.target.getAttribute('data-url');
+        try {
+          await navigator.clipboard.writeText(url);
+          const orig = e.target.textContent;
+          e.target.textContent = 'COPIED!';
+          setTimeout(() => { e.target.textContent = orig; }, 1500);
+        } catch (_) {}
+      });
 
       // Seed re-roll listener
       const btnReroll = card.querySelector(`.btn-reroll-seed[data-unit-id="${unit.id}"]`);
@@ -1112,5 +1506,128 @@ export class ForgeModal {
     });
 
     container.appendChild(grid);
+  }
+
+  /* ========================================================================
+     Tab 4: Chronological Orb Ledger (/api/drop, /api/salvage, /api/craft)
+     ======================================================================== */
+
+  _renderLedgerTab(container) {
+    const ledger = getOrbLedger();
+
+    const header = document.createElement('div');
+    header.className = 'ledger-summary-header';
+
+    const dropsCount = ledger.filter((e) => e.type === 'drop').length;
+    const salvageCount = ledger.filter((e) => e.type === 'salvage').length;
+    const craftsCount = ledger.filter((e) => e.type && e.type.startsWith('craft')).length;
+
+    header.innerHTML = `
+      <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <span>✦ TRANSACTIONS: <strong>${ledger.length}</strong></span>
+          <span style="color: #34d399;">DROPS: <strong>${dropsCount}</strong></span>
+          <span style="color: #38bdf8;">SALVAGED: <strong>${salvageCount}</strong></span>
+          <span style="color: #fbbf24;">CRAFTS: <strong>${craftsCount}</strong></span>
+        </div>
+        <button class="hud-btn" id="btn-clear-ledger" style="padding: 2px 8px; font-size: 10px;">
+          🗑️ CLEAR LEDGER
+        </button>
+      </div>
+    `;
+
+    header.querySelector('#btn-clear-ledger')?.addEventListener('click', () => {
+      clearOrbLedger();
+      this._renderActiveTab();
+    });
+
+    container.appendChild(header);
+
+    if (ledger.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ledger-empty-msg';
+      empty.innerHTML = `
+        <div style="text-align: center; padding: 40px; color: var(--text-muted); line-height: 1.6;">
+          📜 The Set.world Orb Ledger is empty.<br />
+          Defeat Crimson enemies (<code>/api/drop</code>), recycle weapons in Armory (<code>/api/salvage</code>),
+          or forge equipment (<code>/api/craft</code>) to log live receipts.
+        </div>
+      `;
+      container.appendChild(empty);
+      return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'ledger-entries-list';
+
+    ledger.forEach((entry) => {
+      const row = document.createElement('div');
+      row.className = `ledger-entry-row ${entry.type || 'generic'}`;
+
+      const timeStr = new Date(entry.timestamp).toLocaleTimeString();
+      const isPositive = (entry.orbsDelta || 0) >= 0;
+      const deltaClass = isPositive ? 'orbs-plus' : 'orbs-minus';
+      const deltaStr = isPositive ? `+${entry.orbsDelta}` : `${entry.orbsDelta}`;
+
+      let detailsHtml = '';
+
+      if (entry.type === 'drop') {
+        const sv = entry.statsVector || {};
+        detailsHtml = `
+          <div class="ledger-details-main">
+            <span class="ledger-endpoint-tag drop">/api/drop</span>
+            <span style="font-weight: 800; color: #f8fafc;">Defeated ${entry.unitName} [${entry.unitClass}]</span>
+          </div>
+          <div class="ledger-stats-vector">
+            <span>STR:${sv.STR ?? '-'}</span>
+            <span>DEX:${sv.DEX ?? '-'}</span>
+            <span>INT:${sv.INT ?? '-'}</span>
+            <span>WIS:${sv.WIS ?? '-'}</span>
+            <span>AGI:${sv.AGI ?? '-'}</span>
+            <span>VIT:${sv.VIT ?? '-'}</span>
+            <span>PER:${sv.PER ?? '-'}</span>
+            <span>RES:${sv.RES ?? '-'}</span>
+            <span>LCK:${sv.LCK ?? '-'}</span>
+          </div>
+        `;
+      } else if (entry.type === 'salvage') {
+        detailsHtml = `
+          <div class="ledger-details-main">
+            <span class="ledger-endpoint-tag salvage">/api/salvage</span>
+            <span style="font-weight: 800; color: #f8fafc;">Recycled ${entry.itemName} [${(entry.slot || 'tool').toUpperCase()}] (${entry.tier || 'C'})</span>
+          </div>
+        `;
+      } else if (entry.type === 'craft_guarantee') {
+        detailsHtml = `
+          <div class="ledger-details-main">
+            <span class="ledger-endpoint-tag craft-guarantee">/api/craft?tier=${entry.tier}</span>
+            <span style="font-weight: 800; color: #f8fafc;">Forged ${entry.itemName} [${(entry.slot || 'tool').toUpperCase()}] (Grade ${entry.tier})</span>
+          </div>
+        `;
+      } else {
+        detailsHtml = `
+          <div class="ledger-details-main">
+            <span class="ledger-endpoint-tag craft-lottery">/api/craft?orbs=</span>
+            <span style="font-weight: 800; color: #f8fafc;">Lottery Forged ${entry.itemName || 'Item'} (${entry.candidateRolls || 1} candidates)</span>
+          </div>
+        `;
+      }
+
+      row.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+          <span class="ledger-time-stamp">${timeStr}</span>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            ${detailsHtml}
+          </div>
+        </div>
+        <div class="ledger-delta-badge ${deltaClass}">
+          ✦ ${deltaStr} ORBS
+        </div>
+      `;
+
+      list.appendChild(row);
+    });
+
+    container.appendChild(list);
   }
 }
