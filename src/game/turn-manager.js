@@ -873,4 +873,28 @@ export class TurnManager {
       forecast: null
     };
   }
+
+  /**
+   * Computes a valid stepped path between startTile and destTile.
+   * @param {Object} startTile { x, z }
+   * @param {Object} destTile { x, z }
+   * @param {Object} board
+   * @param {Array} allUnits
+   * @param {Object|null} unit
+   * @returns {Array<Object>} Path array of tiles
+   */
+  findPath(startTile, destTile, board, allUnits = [], unit = null) {
+    if (!startTile || !destTile) return [];
+    if (startTile.x === destTile.x && startTile.z === destTile.z) return [startTile];
+
+    const proxyUnit = unit ? { ...unit, gridX: startTile.x, gridZ: startTile.z, moveRange: Math.max(unit.moveRange || 4, 16) }
+      : { gridX: startTile.x, gridZ: startTile.z, moveRange: 16, jumpHeight: 4 };
+
+    const reachable = getReachableTiles(proxyUnit, board, allUnits);
+    const match = reachable.find((t) => t.x === destTile.x && t.z === destTile.z);
+    if (match && match.path && match.path.length > 0) {
+      return match.path;
+    }
+    return [startTile, destTile];
+  }
 }

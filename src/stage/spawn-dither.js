@@ -49,22 +49,38 @@ export function patchSpawnMaterial(material) {
 
     shader.uniforms.spawnProgress = ref;
 
-    shader.fragmentShader = shader.fragmentShader.replace(
-      'void main() {',
-      `uniform float spawnProgress;\n${BAYER_GLSL}\nvoid main() {`
-    );
+    if (!shader.fragmentShader.includes('spawnProgress')) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'void main() {',
+        `uniform float spawnProgress;\n${BAYER_GLSL}\nvoid main() {`
+      );
+    }
 
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <dithering_fragment>',
-      `#include <dithering_fragment>
+    if (shader.fragmentShader.includes('#include <dithering_fragment>')) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
        if (spawnProgress < 1.0) {
          float bayer = spawnBayer4(floor(gl_FragCoord.xy / 2.0));
          if (bayer > spawnProgress) discard;
        }`
-    );
+      );
+    } else {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'void main() {',
+        `void main() {
+       if (spawnProgress < 1.0) {
+         float bayer = spawnBayer4(floor(gl_FragCoord.xy / 2.0));
+         if (bayer > spawnProgress) discard;
+       }`
+      );
+    }
   };
 
-  material.customProgramCacheKey = () => 'spawn_bayer';
+  const prevCacheKey = typeof material.customProgramCacheKey === 'function'
+    ? material.customProgramCacheKey.bind(material)
+    : null;
+  material.customProgramCacheKey = () => (prevCacheKey ? `${prevCacheKey()}_spawn_bayer` : 'spawn_bayer');
   material.needsUpdate = true;
   return ref;
 }

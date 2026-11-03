@@ -61,6 +61,30 @@ export const SETWORLD_NINE_STATS = [
   'luck'
 ];
 
+export const STAT_NAME_TO_ABBR = {
+  strength: 'STR',
+  dexterity: 'DEX',
+  intelligence: 'INT',
+  wisdom: 'WIS',
+  agility: 'AGI',
+  vitality: 'VIT',
+  perception: 'PER',
+  resolve: 'RES',
+  luck: 'LCK'
+};
+
+export const STAT_ABBR_TO_NAME = {
+  STR: 'strength',
+  DEX: 'dexterity',
+  INT: 'intelligence',
+  WIS: 'wisdom',
+  AGI: 'agility',
+  VIT: 'vitality',
+  PER: 'perception',
+  RES: 'resolve',
+  LCK: 'luck'
+};
+
 /**
  * 12 Distinct Set.world Character Advantages with stat and combat modifiers
  */
@@ -436,6 +460,8 @@ export function craftGuaranteedTier(tier = 'A', slotFilter = null, seed = null) 
     id: `item_craft_${finalTier}_${slot}_${normalizedSeed}`,
     name: fullName,
     slot,
+    type: slot,
+    equippedSlot: slot,
     tier: finalTier,
     grade: finalTier,
     tierGrade: finalTier,
@@ -481,10 +507,25 @@ export function craftGuaranteedTier(tier = 'A', slotFilter = null, seed = null) 
     };
   }
 
+  const receipt = {
+    type: 'craft_guarantee',
+    endpoint: `/api/craft?tier=${finalTier}`,
+    tierGrade: finalTier,
+    cost,
+    targetSlot: slot,
+    slot,
+    item,
+    candidateRolls: 1,
+    provenance: `https://set.world/craft?tier=${finalTier}&slot=${slot}&seed=${normalizedSeed}`,
+    ruleStamp: 'set-world-0-15-8-craft-guarantee-1'
+  };
+
   recordOrbLedgerEntry({
     type: 'craft_guarantee',
+    endpoint: `/api/craft?tier=${finalTier}`,
     tier: finalTier,
     cost,
+    orbsDelta: -cost,
     itemId: item.id,
     itemName: item.name,
     slot: item.slot,
@@ -495,10 +536,29 @@ export function craftGuaranteedTier(tier = 'A', slotFilter = null, seed = null) 
   return {
     item,
     cost,
+    receipt,
     tier: finalTier,
     mode: 'guarantee',
     ruleStamp: 'set-world-0-15-8-craft-guarantee-1'
   };
+}
+
+/**
+ * Side-effect free calculation of salvage orb yield according to Set.world tier table.
+ * @param {Object} item
+ * @returns {number}
+ */
+export function getSalvageOrbYield(item) {
+  const grade = (
+    item?.grade ||
+    item?.tierGrade ||
+    item?.tier ||
+    item?.material?.tierGrade ||
+    'C'
+  ).toString().toUpperCase();
+
+  const cost = GUARANTEE_CRAFT_COSTS[grade] || 40;
+  return Math.max(10, Math.round(cost * 0.45));
 }
 
 /**
@@ -516,15 +576,19 @@ export function salvageEquipmentItem(item, seed = null) {
   ).toString().toUpperCase();
 
   const cost = GUARANTEE_CRAFT_COSTS[grade] || 40;
-  const orbs = Math.max(10, Math.round(cost * 0.45));
+  const orbs = getSalvageOrbYield(item);
 
   const entry = {
     type: 'salvage',
+    endpoint: '/api/salvage',
     orbs,
+    orbsRecovered: orbs,
+    orbsDelta: +orbs,
     itemId: item?.id || (item?.seed ? `item_${item.seed}_${item?.slot || 'gear'}` : 'item_salvage'),
     itemName: item?.name || 'Salvaged Equipment',
     grade,
     material: item?.material || 'iron',
+    slot: item?.equippedSlot || item?.slot || 'tool',
     ruleStamp: 'set-world-0-15-8-salvage-1',
     timestamp: Date.now()
   };
@@ -532,6 +596,9 @@ export function salvageEquipmentItem(item, seed = null) {
 
   return {
     orbs,
+    orbsRecovered: orbs,
+    cost,
+    receipt: entry,
     itemId: item?.id,
     itemName: item?.name,
     grade,
@@ -541,14 +608,19 @@ export function salvageEquipmentItem(item, seed = null) {
 }
 
 /**
- * Synthesizes 9 Set.world base stats from a seed in 8..24 range.
+ * Synthesizes 9 Set.world base stats from a seed in 8..24 range,
+ * populated with both full canonical names ('strength') and abbreviations ('STR').
  */
 function synthesizeNineStats(seed) {
   const norm = (seed >>> 0) || 1337;
   const result = {};
   for (let i = 0; i < SETWORLD_NINE_STATS.length; i++) {
+    const sName = SETWORLD_NINE_STATS[i];
     const sRng = createSeededRng(deriveSeed(norm, 200 + i));
-    result[SETWORLD_NINE_STATS[i]] = 10 + sRng.nextInt(0, 8); // 10..17
+    const val = 10 + sRng.nextInt(0, 8); // 10..17
+    result[sName] = val;
+    const abbr = STAT_NAME_TO_ABBR[sName];
+    if (abbr) result[abbr] = val;
   }
   return result;
 }
@@ -564,7 +636,7 @@ export function calculateEnemyDropOrbs(fallenUnit, seed = null) {
   const rng = createSeededRng(deriveSeed(dropSeed, 888));
 
   const fs = fallenUnit?.finalStats || synthesizeNineStats(dropSeed);
-  const statVector = SETWORLD_NINE_STATS.map((s) => fs[s] ?? 12).join('-');
+  const statVector = SETWORLD_NINE_STATS.map((s) => fs[s] ?? fs[STAT_NAME_TO_ABBR[s]] ?? 12).join('-');
 
   const isBoss = !!(fallenUnit?.isBoss || fallenUnit?.isRaidBoss || fallenUnit?.rank === 'COMMANDER');
   const gradeKey = (fallenUnit?.grade || fallenUnit?.tierGrade || fallenUnit?.tier || 'C').toString().toUpperCase();
@@ -585,7 +657,10 @@ export function calculateEnemyDropOrbs(fallenUnit, seed = null) {
 
   const entry = {
     type: 'drop',
+    endpoint,
     orbs,
+    dropOrbs: orbs,
+    orbsDelta: +orbs,
     dropClass,
     statVector,
     unitId: fallenUnit?.id || 'unknown_unit',
@@ -597,32 +672,41 @@ export function calculateEnemyDropOrbs(fallenUnit, seed = null) {
 
   return {
     orbs,
+    dropOrbs: orbs,
     dropClass,
     statVector,
     endpoint,
+    receipt: entry,
     ruleStamp: 'set-world-0-15-8-drop-1'
   };
 }
 
 /**
  * Populates 9-stat finalStats, advantage, disadvantage, talent, StratagemDocument,
- * and Birth Certificate onto a unit.
+ * and Birth Certificate onto a unit. Ensures both canonical names and 3-letter abbreviations exist.
  */
 export function populateUnitBirthCertificate(unit) {
   if (!unit) return unit;
-  const seed = (unit.seed !== undefined ? unit.seed : 1337) >>> 0;
+  const seed = (unit.seed !== undefined
+    ? unit.seed
+    : (unit.id ? deriveSeed(typeof unit.id === 'string' ? unit.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) : 1337, 7) : 1337)
+  ) >>> 0;
   unit.seed = seed;
 
-  // 1. Synthesize / Ensure all 9 stats in finalStats
+  // 1. Synthesize / Ensure all 9 stats in finalStats (both name and abbreviation)
   if (!unit.finalStats || typeof unit.finalStats !== 'object') {
     unit.finalStats = synthesizeNineStats(seed);
   } else {
     for (let i = 0; i < SETWORLD_NINE_STATS.length; i++) {
-      const s = SETWORLD_NINE_STATS[i];
-      if (unit.finalStats[s] === undefined) {
+      const sName = SETWORLD_NINE_STATS[i];
+      const abbr = STAT_NAME_TO_ABBR[sName];
+      let val = unit.finalStats[sName] ?? unit.finalStats[abbr];
+      if (val === undefined) {
         const sRng = createSeededRng(deriveSeed(seed, 200 + i));
-        unit.finalStats[s] = 10 + sRng.nextInt(0, 8);
+        val = 10 + sRng.nextInt(0, 8);
       }
+      unit.finalStats[sName] = val;
+      if (abbr) unit.finalStats[abbr] = val;
     }
   }
 
@@ -640,28 +724,48 @@ export function populateUnitBirthCertificate(unit) {
     unit.talent = TALENTS_CODEX[talIndex];
   }
 
-  // 3. Fold stat mods into finalStats
+  // 3. Fold stat mods into finalStats (updating both name and abbreviation keys)
   if (unit.advantage?.statMods) {
-    for (const [st, val] of Object.entries(unit.advantage.statMods)) {
-      if (unit.finalStats[st] !== undefined) {
-        unit.finalStats[st] = Math.max(1, unit.finalStats[st] + val);
+    for (const [st, mod] of Object.entries(unit.advantage.statMods)) {
+      const full = STAT_ABBR_TO_NAME[st] || st;
+      const abbr = STAT_NAME_TO_ABBR[st] || st;
+      if (unit.finalStats[full] !== undefined) {
+        unit.finalStats[full] = Math.max(1, unit.finalStats[full] + mod);
+      }
+      if (unit.finalStats[abbr] !== undefined) {
+        unit.finalStats[abbr] = Math.max(1, unit.finalStats[abbr] + mod);
       }
     }
   }
   if (unit.disadvantage?.statMods) {
-    for (const [st, val] of Object.entries(unit.disadvantage.statMods)) {
-      if (unit.finalStats[st] !== undefined) {
-        unit.finalStats[st] = Math.max(1, unit.finalStats[st] + val);
+    for (const [st, mod] of Object.entries(unit.disadvantage.statMods)) {
+      const full = STAT_ABBR_TO_NAME[st] || st;
+      const abbr = STAT_NAME_TO_ABBR[st] || st;
+      if (unit.finalStats[full] !== undefined) {
+        unit.finalStats[full] = Math.max(1, unit.finalStats[full] + mod);
+      }
+      if (unit.finalStats[abbr] !== undefined) {
+        unit.finalStats[abbr] = Math.max(1, unit.finalStats[abbr] + mod);
       }
     }
   }
   if (unit.talent?.stats) {
-    for (const [st, val] of Object.entries(unit.talent.stats)) {
-      if (unit.finalStats[st] !== undefined && typeof val === 'number') {
-        unit.finalStats[st] = Math.max(1, unit.finalStats[st] + val);
+    for (const [st, mod] of Object.entries(unit.talent.stats)) {
+      if (typeof mod === 'number') {
+        const full = STAT_ABBR_TO_NAME[st] || st;
+        const abbr = STAT_NAME_TO_ABBR[st] || st;
+        if (unit.finalStats[full] !== undefined) {
+          unit.finalStats[full] = Math.max(1, unit.finalStats[full] + mod);
+        }
+        if (unit.finalStats[abbr] !== undefined) {
+          unit.finalStats[abbr] = Math.max(1, unit.finalStats[abbr] + mod);
+        }
       }
     }
   }
+
+  unit.stats = unit.stats || {};
+  Object.assign(unit.stats, unit.finalStats);
 
   // 4. Attach Birth Certificate
   unit.birthCertificate = {
@@ -683,6 +787,8 @@ export function populateUnitBirthCertificate(unit) {
 
   return unit;
 }
+
+export const ensureUnitSetWorldData = populateUnitBirthCertificate;
 
 /**
  * Normalizes a unit with full Set.world birth certificate and equipment recalculation.

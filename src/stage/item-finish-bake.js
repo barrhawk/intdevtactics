@@ -383,7 +383,9 @@ export function applyItemFaces(material, faceOrBake, insideOrName, tintColor = n
   const inlay = tintColor ? new THREE.Color(tintColor) : new THREE.Color(MYTHRIL_INLAY);
   const paper = face.inside === PAGES ? 1.0 : 0.0;
 
-  material.onBeforeCompile = (shader) => {
+  const prevCompile = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    if (prevCompile) prevCompile(shader, renderer);
     Object.assign(shader.uniforms, {
       itemPlate: plateUniform,
       itemInside: insideUniform,
@@ -465,8 +467,13 @@ export function applyItemFaces(material, faceOrBake, insideOrName, tintColor = n
       );
   };
 
-  material.customProgramCacheKey = () =>
-    `item-faces-${face.inside}-${inlay.getHexString()}`;
+  const prevFaceCacheKey = typeof material.customProgramCacheKey === 'function'
+    ? material.customProgramCacheKey.bind(material)
+    : null;
+  material.customProgramCacheKey = () => {
+    const key = `item-faces-${face.inside}-${inlay.getHexString()}`;
+    return prevFaceCacheKey ? `${prevFaceCacheKey()}_${key}` : key;
+  };
   material.needsUpdate = true;
   return material;
 }
@@ -488,7 +495,9 @@ export function applyMythrilVeins(material, veinColor = MYTHRIL_VEIN_COLOR) {
     material.iridescenceThicknessMaximum = 420;
   }
 
-  material.onBeforeCompile = (shader) => {
+  const prevCompile = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    if (prevCompile) prevCompile(shader, renderer);
     shader.uniforms.mythrilVein = { value: vein };
 
     shader.vertexShader = shader.vertexShader
@@ -536,7 +545,13 @@ export function applyMythrilVeins(material, veinColor = MYTHRIL_VEIN_COLOR) {
       );
   };
 
-  material.customProgramCacheKey = () => `mythril-veins-${vein.getHexString()}`;
+  const prevVeinCacheKey = typeof material.customProgramCacheKey === 'function'
+    ? material.customProgramCacheKey.bind(material)
+    : null;
+  material.customProgramCacheKey = () => {
+    const key = `mythril-veins-${vein.getHexString()}`;
+    return prevVeinCacheKey ? `${prevVeinCacheKey()}_${key}` : key;
+  };
   material.needsUpdate = true;
   return material;
 }
@@ -546,21 +561,25 @@ let _sharedEnvironment = null;
 /**
  * Prefilters RoomEnvironment via PMREMGenerator once and assigns reflection envMap
  * to all passed materials so metallic weapons and shields gleam with reflections.
+ * Caches environment so subsequent calls do not discard or thrash active textures.
  * @param {THREE.WebGLRenderer} renderer
  * @param {THREE.Material[]} [materials=[]]
+ * @param {boolean} [force=false]
  * @returns {THREE.WebGLRenderTarget|null}
  */
-export function bakeRoomEnvironment(renderer, materials = []) {
+export function bakeRoomEnvironment(renderer, materials = [], force = false) {
   if (!renderer) return null;
-  if (_sharedEnvironment) {
-    _sharedEnvironment.dispose();
-    _sharedEnvironment = null;
+  if (!_sharedEnvironment || force) {
+    if (_sharedEnvironment) {
+      _sharedEnvironment.dispose();
+      _sharedEnvironment = null;
+    }
+    const prefilter = new THREE.PMREMGenerator(renderer);
+    const room = new RoomEnvironment();
+    _sharedEnvironment = prefilter.fromScene(room, ENVIRONMENT_BLUR);
+    room.dispose();
+    prefilter.dispose();
   }
-  const prefilter = new THREE.PMREMGenerator(renderer);
-  const room = new RoomEnvironment();
-  _sharedEnvironment = prefilter.fromScene(room, ENVIRONMENT_BLUR);
-  room.dispose();
-  prefilter.dispose();
 
   const envTexture = _sharedEnvironment.texture;
   if (Array.isArray(materials)) {

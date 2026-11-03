@@ -11,318 +11,23 @@
 import * as SetWorldClient from '../game/setworld-client.js';
 import * as CombatRules from '../game/combat-rules.js';
 
-export const EQUIPMENT_SLOTS = SetWorldClient.EQUIPMENT_SLOTS || [
-  'tool',
-  'offhand',
-  'head',
-  'chest',
-  'legs',
-  'feet',
-  'neck',
-  'finger'
-];
-
-export const GUARANTEE_CRAFT_COSTS = SetWorldClient.GUARANTEE_CRAFT_COSTS || {
-  F: 15,
-  E: 30,
-  D: 60,
-  C: 120,
-  B: 240,
-  A: 480,
-  S: 900
-};
-
-export const SETWORLD_NINE_STATS = SetWorldClient.SETWORLD_NINE_STATS || [
-  'STR', 'DEX', 'INT', 'WIS', 'AGI', 'VIT', 'PER', 'RES', 'LCK'
-];
-
-export const ADVANTAGES_CATALOG = SetWorldClient.ADVANTAGES_CATALOG || [
-  { id: 'keen_eye', name: 'Keen Eye', desc: '+15% Critical hit chance on flank and back attacks' },
-  { id: 'iron_will', name: 'Iron Will', desc: 'Reduces debuff and status effect durations by 1 turn' },
-  { id: 'nimble_step', name: 'Nimble Step', desc: '+1 Movement and ignore elevation climbing penalties' },
-  { id: 'mana_spring', name: 'Mana Spring', desc: 'Regenerates +5 MP at start of turn' },
-  { id: 'brawler', name: 'Brawler', desc: '+20% Unarmed and tool strike damage' },
-  { id: 'arcane_insight', name: 'Arcane Insight', desc: '+15% Spell casting range and AoE potency' },
-  { id: 'thick_hide', name: 'Thick Hide', desc: '+10 VIT and +15% physical damage resistance' },
-  { id: 'lucky_charm', name: 'Lucky Charm', desc: '+25% Drop rate of high-grade Set.world Orbs' }
-];
-
-export const DISADVANTAGES_CATALOG = SetWorldClient.DISADVANTAGES_CATALOG || [
-  { id: 'honor_bound', name: 'Honor Bound', desc: 'Deals 20% less damage when attacking foes from behind' },
-  { id: 'glass_cannon', name: 'Glass Cannon', desc: '+15% Damage dealt, but takes 15% more damage from all sources' },
-  { id: 'slow_reflexes', name: 'Slow Reflexes', desc: '-10 Speed and takes +10% CT to charge next turn' },
-  { id: 'mana_burnout', name: 'Mana Burnout', desc: 'Spell costs increased by +3 MP' },
-  { id: 'acrophobia', name: 'Acrophobia', desc: 'Suffers -15% Hit rate when standing on tiles height >= 4' },
-  { id: 'clumsy', name: 'Clumsy', desc: '5% Chance to trip and lose remaining movement points' },
-  { id: 'reckless', name: 'Reckless', desc: 'Cannot use Wait defense buff (+0 DEF while resting)' }
-];
-
-export const TALENTS_CODEX = SetWorldClient.TALENTS_CODEX || [
-  { id: 'aether_conduit', name: 'Aether Conduit', desc: 'MP recovery increases when standing on water or crystal stream tiles', flavor: 'The stars whisper through their veins.' },
-  { id: 'vanguard_shield', name: 'Vanguard Shield', desc: 'When adjacent allies are attacked, absorb 20% of their damage', flavor: 'No one falls while I stand.' },
-  { id: 'shadow_dancer', name: 'Shadow Dancer', desc: 'Attacking from stealth or flank refunds 15 CT', flavor: 'Gone before the echo fades.' },
-  { id: 'runic_resonance', name: 'Runic Resonance', desc: 'Weapon material resonance bonuses are doubled', flavor: 'Ancient runes awaken to their touch.' },
-  { id: 'deathmark_instinct', name: 'Deathmark Instinct', desc: 'Deals 30% bonus damage to targets below 30% HP', flavor: 'Scent of blood seals the verdict.' },
-  { id: 'divine_bastion', name: 'Divine Bastion', desc: 'Converts 10% of healing received into a temporary damage barrier', flavor: 'Light protects those who walk the path.' }
-];
-
-/* ========================================================================
-   Orb Ledger Transaction Log Store
-   ======================================================================== */
-
-const globalOrbLedger = [];
-
-export function recordOrbLedgerEntry(entry) {
-  if (typeof SetWorldClient.recordOrbLedgerEntry === 'function') {
-    try {
-      return SetWorldClient.recordOrbLedgerEntry(entry);
-    } catch (_) {}
-  }
-  const item = {
-    id: `ledger-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-    timestamp: Date.now(),
-    ...entry
-  };
-  globalOrbLedger.unshift(item);
-  return item;
-}
-
-export function getOrbLedger() {
-  if (typeof SetWorldClient.getOrbLedger === 'function') {
-    try {
-      return SetWorldClient.getOrbLedger();
-    } catch (_) {}
-  }
-  return globalOrbLedger;
-}
-
-export function clearOrbLedger() {
-  if (typeof SetWorldClient.clearOrbLedger === 'function') {
-    try {
-      return SetWorldClient.clearOrbLedger();
-    } catch (_) {}
-  }
-  globalOrbLedger.length = 0;
-}
-
-/* ========================================================================
-   Guarantee Craft & Salvage Functions
-   ======================================================================== */
-
-export async function craftGuaranteedTier(tier = 'C', slotFilter = 'all', seed = Date.now()) {
-  if (typeof SetWorldClient.craftGuaranteedTier === 'function') {
-    try {
-      const res = await SetWorldClient.craftGuaranteedTier(tier, slotFilter, seed);
-      if (res) return res;
-    } catch (_) {}
-  }
-
-  const cost = GUARANTEE_CRAFT_COSTS[tier] || 120;
-  const targetSlot = (slotFilter && slotFilter !== 'all') ? slotFilter :
-    EQUIPMENT_SLOTS[Math.floor(Math.random() * EQUIPMENT_SLOTS.length)];
-
-  const materialsByTier = {
-    S: ['Star-Metal', 'Celestial Nephrite', 'Sovereign Mythril'],
-    A: ['Adamantite', 'Titanium Mythril', 'Void Obsidian'],
-    B: ['Nephrite', 'Mythril Alloy', 'Dark Steel'],
-    C: ['Mythril', 'Iron Alloy', 'Refined Steel'],
-    D: ['Wrought Iron', 'Bronze Alloy', 'Reinforced Wood'],
-    E: ['Raw Copper', 'Padded Hide', 'Crude Iron'],
-    F: ['Rusted Iron', 'Rough Leather', 'Chipped Stone']
-  };
-  const matList = materialsByTier[tier] || materialsByTier.C;
-  const material = matList[Math.floor(Math.random() * matList.length)];
-
-  const slotNames = {
-    tool: ['Sovereign Blade', 'Celestial Bow', 'Arcane Rod', 'Mythril Dirk'],
-    offhand: ['Aegis Shield', 'Ward Barrier', 'Parrying Buckler', 'Tower Shield'],
-    head: ['Great Helm', 'Astral Crown', 'Visor', 'Circlet of Set'],
-    chest: ['Plate Cuirass', 'Robe of Stars', 'Battle Mail', 'Reinforced Hauberk'],
-    legs: ['Greaves of Valor', 'Iron Chausses', 'Padded Leggings', 'Plate Trousers'],
-    feet: ['Sabatons of Speed', 'Wind Treads', 'Iron Sabatons', 'Starlight Boots'],
-    neck: ['Amulet of Set', 'Pendant of Power', 'Star Torc', 'Medallion of Kings'],
-    finger: ['Band of Heritage', 'Signet of Set', 'Ring of Sovereign', 'Loop of Aegis']
-  };
-  const names = slotNames[targetSlot] || ['Artifact'];
-  const itemName = `${material} ${names[Math.floor(Math.random() * names.length)]}`;
-
-  const bonusPwr = tier === 'S' ? 28 : tier === 'A' ? 20 : tier === 'B' ? 14 : tier === 'C' ? 8 : tier === 'D' ? 4 : 2;
-  const statsBonus = `+${bonusPwr} Power Rating, +${Math.round(bonusPwr * 0.7)} Base Stats`;
-
-  const item = {
-    id: `craft-guarantee-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-    name: itemName,
-    type: targetSlot,
-    slot: targetSlot,
-    equippedSlot: targetSlot,
-    grade: tier,
-    tier: tier,
-    tierGrade: tier,
-    orbValue: cost,
-    material: material,
-    elementalPrefix: 'ASTRAL',
-    finishTier: tier === 'S' ? 'Adamantite' : tier === 'A' ? 'Gold' : tier === 'B' ? 'Mythril' : 'Iron',
-    statsBonus: statsBonus,
-    boostStars: 0,
-    equippedTo: null,
-    seed: `guarantee-${seed}`
-  };
-
-  const receipt = {
-    type: 'craft_guarantee',
-    endpoint: `/api/craft?tier=${tier}`,
-    tierGrade: tier,
-    cost: cost,
-    targetSlot: targetSlot,
-    item: item,
-    candidateRolls: 1,
-    provenance: `https://set.world/craft?tier=${tier}&slot=${targetSlot}&seed=${seed}`
-  };
-
-  recordOrbLedgerEntry({
-    type: 'craft_guarantee',
-    endpoint: `/api/craft?tier=${tier}`,
-    timestamp: Date.now(),
-    tier: tier,
-    slot: targetSlot,
-    itemName: item.name,
-    orbsDelta: -cost,
-    seed: seed
-  });
-
-  return { item, receipt, cost };
-}
-
-export function salvageEquipmentItem(item, seed = Date.now()) {
-  if (typeof SetWorldClient.salvageEquipmentItem === 'function') {
-    try {
-      const res = SetWorldClient.salvageEquipmentItem(item, seed);
-      if (res) return res;
-    } catch (_) {}
-  }
-
-  const baseYield = SetWorldClient.salvageItem ? SetWorldClient.salvageItem(item) : 0;
-  const orbVal = item.orbValue || item.rawItem?.orbValue || 25;
-  const yieldOrbs = baseYield > 0 ? baseYield : Math.max(2, Math.floor(orbVal * 0.25));
-
-  const entry = {
-    type: 'salvage',
-    endpoint: '/api/salvage',
-    timestamp: Date.now(),
-    itemId: item.id || `item-salvaged-${Date.now()}`,
-    itemName: item.name || 'Salvaged Equipment',
-    slot: item.equippedSlot || item.slot || normalizeSlot(item),
-    tier: (item.tierGrade || item.tier || item.grade || 'C').toUpperCase(),
-    orbsDelta: +yieldOrbs,
-    seed: seed
-  };
-
-  recordOrbLedgerEntry(entry);
-  return { orbsRecovered: yieldOrbs, orbs: yieldOrbs, receipt: entry };
-}
-
-export function calculateEnemyDropOrbs(fallenUnit, seed = Date.now()) {
-  if (typeof SetWorldClient.calculateEnemyDropOrbs === 'function') {
-    try {
-      const res = SetWorldClient.calculateEnemyDropOrbs(fallenUnit, seed);
-      if (res) return res;
-    } catch (_) {}
-  }
-
-  const stats = fallenUnit?.finalStats || fallenUnit?.stats || {};
-  const sSum = (stats.STR || 30) + (stats.DEX || 30) + (stats.INT || 30) +
-               (stats.WIS || 25) + (stats.AGI || 30) + (stats.VIT || 30) +
-               (stats.PER || 25) + (stats.RES || 20) + (stats.LCK || 20);
-  const isBoss = !!(fallenUnit?.isBoss || (fallenUnit?.rank && fallenUnit?.rank !== 'SOLDIER'));
-  const baseDrop = Math.max(12, Math.floor(sSum / 7));
-  const dropOrbs = isBoss ? baseDrop * 3 : baseDrop;
-
-  const entry = {
-    type: 'drop',
-    endpoint: '/api/drop',
-    timestamp: Date.now(),
-    unitName: fallenUnit?.name || 'Crimson Footsoldier',
-    unitClass: fallenUnit?.job || fallenUnit?.className || 'Warrior',
-    statsVector: {
-      STR: stats.STR || 30,
-      DEX: stats.DEX || 30,
-      INT: stats.INT || 30,
-      WIS: stats.WIS || 25,
-      AGI: stats.AGI || 30,
-      VIT: stats.VIT || 30,
-      PER: stats.PER || 25,
-      RES: stats.RES || 20,
-      LCK: stats.LCK || 20
-    },
-    orbsDelta: +dropOrbs,
-    seed: seed
-  };
-
-  recordOrbLedgerEntry(entry);
-  return { dropOrbs, orbs: dropOrbs, entry };
-}
-
-/* ========================================================================
-   Unit 9-Stat, Advantage, Talent & Birth Certificate Hydration Helper
-   ======================================================================== */
-
-function simpleHash(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return hash;
-}
-
-export function ensureUnitSetWorldData(unit) {
-  if (!unit) return unit;
-
-  if (!unit.finalStats) {
-    const s = unit.stats || {};
-    unit.finalStats = {
-      STR: s.STR ?? s.str ?? s.physicalDamage ?? 32,
-      DEX: s.DEX ?? s.dex ?? s.accuracy ?? 28,
-      INT: s.INT ?? s.int ?? s.magicDamage ?? 24,
-      WIS: s.WIS ?? s.wis ?? 22,
-      AGI: s.AGI ?? s.agi ?? (s.walkSpeed ? Math.round(s.walkSpeed * 25) : 26),
-      VIT: s.VIT ?? s.vit ?? 30,
-      PER: s.PER ?? s.per ?? 25,
-      RES: s.RES ?? s.res ?? 20,
-      LCK: s.LCK ?? s.lck ?? 20
-    };
-  }
-
-  unit.stats = unit.stats || {};
-  Object.assign(unit.stats, unit.finalStats);
-
-  const uKey = unit.id || unit.name || 'unit';
-
-  if (!unit.advantage) {
-    const idx = Math.abs(simpleHash(uKey + '_adv')) % ADVANTAGES_CATALOG.length;
-    unit.advantage = ADVANTAGES_CATALOG[idx] || ADVANTAGES_CATALOG[0];
-  }
-
-  if (!unit.disadvantage) {
-    const idx = Math.abs(simpleHash(uKey + '_dis')) % DISADVANTAGES_CATALOG.length;
-    unit.disadvantage = DISADVANTAGES_CATALOG[idx] || DISADVANTAGES_CATALOG[0];
-  }
-
-  if (!unit.talent) {
-    const idx = Math.abs(simpleHash(uKey + '_tal')) % TALENTS_CODEX.length;
-    unit.talent = TALENTS_CODEX[idx] || TALENTS_CODEX[0];
-  }
-
-  if (!unit.birthCertificate) {
-    unit.birthCertificate = {
-      contentVersion: '8.1bmmTgz1B0Y9UKhiu84STg',
-      ruleStamp: 'set-world-0-15-8-character-1',
-      seed: unit.seed || `tactics-${unit.id || 'unit-0x1'}`
-    };
-  }
-
-  return unit;
-}
+export const {
+  EQUIPMENT_SLOTS,
+  GUARANTEE_CRAFT_COSTS,
+  SETWORLD_NINE_STATS,
+  ADVANTAGES_CATALOG,
+  DISADVANTAGES_CATALOG,
+  TALENTS_CODEX,
+  recordOrbLedgerEntry,
+  getOrbLedger,
+  clearOrbLedger,
+  craftGuaranteedTier,
+  getSalvageOrbYield,
+  salvageEquipmentItem,
+  calculateEnemyDropOrbs,
+  populateUnitBirthCertificate,
+  ensureUnitSetWorldData
+} = SetWorldClient;
 
 export const FALLBACK_CLASS_PASSIVES = {
   Paladin: { name: '⚔️ Shirahadori', desc: 'Blade Catch: 25% chance to deflect melee and counter-attack' },
@@ -1050,12 +755,16 @@ export class ForgeModal {
       return;
     }
 
-    let craftResult = null;
     if (this.callbacks.onGuaranteeCraft) {
-      craftResult = await this.callbacks.onGuaranteeCraft(tier, slot);
-    } else {
-      craftResult = await craftGuaranteedTier(tier, slot, Date.now());
+      const craftResult = await this.callbacks.onGuaranteeCraft(tier, slot);
+      if (craftResult && craftResult.receipt) {
+        this.state.latestReceipt = craftResult.receipt;
+      }
+      this._renderActiveTab();
+      return;
     }
+
+    const craftResult = await craftGuaranteedTier(tier, slot, Date.now());
 
     if (craftResult && craftResult.item) {
       const item = craftResult.item;
@@ -1100,8 +809,7 @@ export class ForgeModal {
       const isEquipped = !!item.equippedTo;
 
       // Authentic Set.world salvage computation
-      const baseYield = SetWorldClient.salvageItem ? SetWorldClient.salvageItem(item) : 0;
-      const salvageYield = baseYield > 0 ? baseYield : Math.max(2, Math.round((item.orbValue || 25) * 0.25));
+      const salvageYield = getSalvageOrbYield(item);
 
       const stars = item.boostStars || item.stars || 0;
       const starsLabel = stars > 0 ? `★ +${stars}` : '★ Base';
@@ -1279,6 +987,11 @@ export class ForgeModal {
     const item = this.state.inventory[itemIndex];
     if (!item) return;
 
+    if (this.callbacks.onSalvageItem) {
+      this.callbacks.onSalvageItem(itemIndex, yieldOrbs);
+      return;
+    }
+
     salvageEquipmentItem(item, Date.now());
 
     this.state.inventory.splice(itemIndex, 1);
@@ -1287,7 +1000,6 @@ export class ForgeModal {
     const orbsEl = this.modalEl?.querySelector('#forge-modal-orbs');
     if (orbsEl) orbsEl.textContent = `✦ ${this.state.orbs.toLocaleString()} ORBS`;
 
-    this.callbacks.onSalvageItem?.(itemIndex, yieldOrbs);
     this._renderActiveTab();
   }
 

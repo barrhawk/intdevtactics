@@ -316,6 +316,14 @@ export class TacticalHUD {
         return;
       }
 
+      // Ignore hotkeys if any modal backdrop is active and visible
+      const activeModal = document.querySelector(
+        '.stratagem-modal-backdrop, .forge-modal-backdrop, .sprite-studio-backdrop, .victory-banner-backdrop'
+      );
+      if (activeModal && window.getComputedStyle(activeModal).display !== 'none') {
+        return;
+      }
+
       switch (e.key.toUpperCase()) {
         case 'Q':
           e.preventDefault();

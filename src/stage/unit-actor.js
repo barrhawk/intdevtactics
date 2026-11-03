@@ -404,8 +404,8 @@ export class UnitActor {
     try {
       if (!UnitActor.sharedItemFinishBake) {
         UnitActor.sharedItemFinishBake = createItemFinishBake(renderer);
+        UnitActor.sharedItemFinishBake.bake();
       }
-      UnitActor.sharedItemFinishBake.bake();
 
       const env = bakeRoomEnvironment(renderer);
       UnitActor.sharedEnvMap = env ? env.texture : null;
@@ -1049,6 +1049,7 @@ export class StageUnitManager {
     // 3D Volumetric physics hulls & sprite layer debug state
     this.physicsDebugEnabled = false;
     this.bodyResources = null;
+    this._activeEffectMeshes = new Set();
 
     this.loaded = false;
   }
@@ -1062,10 +1063,12 @@ export class StageUnitManager {
     if (!renderer) return null;
     try {
       if (!this.itemFinishBake) {
-        this.itemFinishBake = createItemFinishBake(renderer);
+        this.itemFinishBake = UnitActor.sharedItemFinishBake || createItemFinishBake(renderer);
+        if (!UnitActor.sharedItemFinishBake) {
+          this.itemFinishBake.bake();
+          UnitActor.sharedItemFinishBake = this.itemFinishBake;
+        }
       }
-      this.itemFinishBake.bake();
-      UnitActor.sharedItemFinishBake = this.itemFinishBake;
 
       const env = bakeRoomEnvironment(renderer);
       this.envMap = env ? env.texture : null;
@@ -2508,6 +2511,8 @@ export class StageUnitManager {
 
           const flashMesh = createMuzzleFlashMesh(this.scene);
           const streakMesh = createVolumetricStreakMesh(this.scene);
+          this._activeEffectMeshes?.add(flashMesh);
+          this._activeEffectMeshes?.add(streakMesh);
 
           flashMesh.position.copy(muzzlePos);
           flashMesh.visible = true;
@@ -2557,6 +2562,8 @@ export class StageUnitManager {
             } else {
               this.scene.remove(flashMesh);
               this.scene.remove(streakMesh);
+              this._activeEffectMeshes?.delete(flashMesh);
+              this._activeEffectMeshes?.delete(streakMesh);
               flashMesh.geometry.dispose();
               flashMesh.material.dispose();
               streakMesh.geometry.dispose();
@@ -3637,5 +3644,16 @@ export class StageUnitManager {
       if (burst.sparkMat) burst.sparkMat.dispose();
     }
     this.hitBursts = [];
+
+    if (this._activeEffectMeshes) {
+      for (const mesh of this._activeEffectMeshes) {
+        if (mesh) {
+          if (mesh.parent) mesh.parent.remove(mesh);
+          mesh.geometry?.dispose?.();
+          mesh.material?.dispose?.();
+        }
+      }
+      this._activeEffectMeshes.clear();
+    }
   }
 }

@@ -7,6 +7,38 @@
 import { deriveSeed, generateFallbackItem } from './setworld-client.js';
 import { collide } from '@engine/weapons/ballistics';
 
+// Re-export Stratagem Engine API for backwards compatibility and clean cross-module access
+export {
+  STRATAGEM_RULE_STAMP,
+  STRATAGEM_CONDITIONS,
+  STRATAGEM_ACTIONS,
+  evaluateLawCompliance,
+  createDefaultStratagem,
+  exportStratagemJSON,
+  importStratagemJSON,
+  evaluateUnitStratagem,
+} from './stratagem-engine.js';
+
+// Re-export Set.world Client Economy, 9-Stats, Advantages, Disadvantages & Talents
+export {
+  SETWORLD_NINE_STATS,
+  STAT_NAME_TO_ABBR,
+  STAT_ABBR_TO_NAME,
+  ADVANTAGES_CATALOG,
+  DISADVANTAGES_CATALOG,
+  TALENTS_CODEX,
+  GUARANTEE_CRAFT_COSTS,
+  craftGuaranteedTier,
+  salvageEquipmentItem,
+  getSalvageOrbYield,
+  calculateEnemyDropOrbs,
+  recordOrbLedgerEntry,
+  getOrbLedger,
+  clearOrbLedger,
+  populateUnitBirthCertificate,
+  ensureUnitSetWorldData,
+} from './setworld-client.js';
+
 export const DIRECTIONS_8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 /**
@@ -1019,6 +1051,25 @@ export function calculateCombatForecast(attacker, defender, ability, board, acti
     passiveDmgMult *= 1.20;
   }
 
+  // Set.world Character Advantage / Disadvantage / Talent modifiers
+  if (attacker.advantage?.combatMod) {
+    const acm = attacker.advantage.combatMod;
+    if (isMagic && acm.magicDamage) atkStat += acm.magicDamage;
+    else if (!isMagic && acm.physicalDamage) atkStat += acm.physicalDamage;
+    if (acm.accuracy) angleHitMod += acm.accuracy;
+    if (acm.crit) angleCritMod += acm.crit;
+  }
+  if (defender.advantage?.combatMod) {
+    const dcm = defender.advantage.combatMod;
+    if (dcm.defense && !isMagic) defStat += dcm.defense;
+    if (dcm.magicResistance && isMagic) defStat += dcm.magicResistance;
+    if (dcm.dodge) angleHitMod -= dcm.dodge;
+    if (dcm.critResistance) angleCritMod -= Math.round(dcm.critResistance * 100);
+  }
+  if (defender.talent?.stats?.armor && !isMagic) {
+    defStat += defender.talent.stats.armor;
+  }
+
   // Pummel Combo Chain preview (Lv1 -> Lv2 -> Lv3)
   if ((ability?.id === 'pummel_combo' || ability?.comboAnims) && attacker.lastTargetId === defender.id) {
     const nextChain = Math.min(3, (attacker.comboChain || 0) + 1);
@@ -1070,7 +1121,10 @@ export function calculateCombatForecast(attacker, defender, ability, board, acti
   const killBonusSchedule = { S: 250, A: 200, B: 150, C: 110, D: 85, E: 75, F: 75 };
   const killBonus = killBonusSchedule[grade] || 100;
   const willKill = expectedDamage >= (defender.hp ?? 100);
-  const orbRewardEstimate = 25 + (willKill ? killBonus : 0);
+  let orbRewardEstimate = 25 + (willKill ? killBonus : 0);
+  if (attacker.advantage?.combatMod?.orbBonus) {
+    orbRewardEstimate = Math.round(orbRewardEstimate * (1 + attacker.advantage.combatMod.orbBonus));
+  }
 
   return {
     expectedDamage,
@@ -1110,10 +1164,13 @@ export function executeCombatAction(attacker, defender, ability, board, rngSeed,
     ? defender.elevation
     : (getBoardTile(board, dx, dz)?.elevation ?? 0);
 
-  // Spend attacker MP if applicable (Scholar passive: -30% MP costs)
+  // Spend attacker MP if applicable (Scholar passive: -30% MP costs; advantage: mpCostReduction)
   let mpCost = ability?.mpCost !== undefined ? ability.mpCost : (ability?.costMp || 0);
   if (atkPassiveId === 'arcane_leyline' || attacker.className === 'Scholar') {
     mpCost = Math.round(mpCost * 0.70);
+  }
+  if (attacker.advantage?.combatMod?.mpCostReduction) {
+    mpCost = Math.round(mpCost * (1 - attacker.advantage.combatMod.mpCostReduction));
   }
   attacker.mp = Math.max(0, (attacker.mp ?? 40) - mpCost);
 

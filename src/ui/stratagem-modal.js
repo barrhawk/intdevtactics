@@ -10,450 +10,29 @@
  * - Right Live Simulation & JSON Preview Panel: Battlefield preview of matching rule and raw JSON.
  */
 
-import * as CombatRules from '../game/combat-rules.js';
+import {
+  STRATAGEM_RULE_STAMP,
+  STRATAGEM_CONDITIONS,
+  STRATAGEM_ACTIONS,
+  evaluateLawCompliance,
+  getUnitArchetype,
+  createDefaultStratagem,
+  exportStratagemJSON,
+  importStratagemJSON,
+  evaluateUnitStratagem
+} from '../game/stratagem-engine.js';
 
-export const STRATAGEM_RULE_STAMP = 'set-world-0-15-8-stratagems-1';
-
-export const STRATAGEM_CONDITIONS = CombatRules['STRATAGEM_CONDITIONS'] || [
-  { id: 'always', label: 'Always (Default True)', desc: 'Unconditionally matches when evaluated' },
-  { id: 'hp_under_25', label: 'Self: HP < 25%', desc: 'Current unit HP is at or below 25%' },
-  { id: 'hp_under_50', label: 'Self: HP < 50%', desc: 'Current unit HP is at or below 50%' },
-  { id: 'mp_under_20', label: 'Self: MP < 20', desc: 'Current unit MP is below 20' },
-  { id: 'ally_hp_under_30', label: 'Ally: HP < 30%', desc: 'Any teammate is in critical health (< 30% HP)' },
-  { id: 'ally_hp_under_50', label: 'Ally: HP < 50%', desc: 'Any teammate is below 50% HP' },
-  { id: 'ally_down', label: 'Ally: Fallen / Dead', desc: 'Any teammate has fallen in battle' },
-  { id: 'enemy_in_attack_range', label: 'Enemy: In Attack Range', desc: 'At least one enemy is within direct weapon attack range' },
-  { id: 'enemy_cluster', label: 'Enemy: Cluster (2+ Foes)', desc: 'Two or more foes within 2 tiles of each other' },
-  { id: 'enemy_weakest', label: 'Enemy: Lowest HP', desc: 'Target the living enemy with lowest current HP' },
-  { id: 'enemy_caster', label: 'Enemy: Mage / Caster', desc: 'An enemy mage, hexer, or spellcaster is alive' },
-  { id: 'enemy_leader', label: 'Enemy: Boss / Commander', desc: 'A Crimson boss or commander is alive on the field' },
-  { id: 'enemy_buffed', label: 'Enemy: Has Buff / Status', desc: 'An enemy possesses an active buff or stance' },
-  { id: 'standing_on_crystal', label: 'Tile: On Crystal Stream', desc: 'Unit is currently standing on a water or crystal tile' },
-  { id: 'law_risk', label: 'Law: Active Law in Effect', desc: 'An active Judge Law is currently enforced' }
-];
-
-export const STRATAGEM_ACTIONS = CombatRules?.STRATAGEM_ACTIONS || [
-  { id: 'attack_nearest', label: 'Attack: Nearest Foe', desc: 'Advance and strike the closest enemy' },
-  { id: 'attack_weakest', label: 'Attack: Lowest HP Foe', desc: 'Target the enemy with lowest current HP' },
-  { id: 'attack_caster', label: 'Attack: Spellcaster / Ranged', desc: 'Focus fire on enemy spellcasters or ranged units' },
-  { id: 'skill_heal_ally', label: 'Skill: Heal Lowest Ally', desc: 'Use healing magic or first aid on most wounded ally' },
-  { id: 'skill_burst_damage', label: 'Skill: Highest DMG Skill', desc: 'Cast strongest available offensive ability or spell' },
-  { id: 'skill_buff_self', label: 'Skill: Defend / Buff Self', desc: 'Apply defensive stance, shield wall, or self buff' },
-  { id: 'retreat_to_allies', label: 'Move: Fall Back to Allies', desc: 'Retreat towards friendly cluster and defend' },
-  { id: 'advance_flank', label: 'Move: Flank Enemy Position', desc: 'Maneuver to side or rear of nearest enemy' },
-  { id: 'focus_boss', label: 'Attack: Focus Boss / Leader', desc: 'Coordinate all attacks against the enemy commander' },
-  { id: 'hold_ground', label: 'Wait: Hold Ground & Defend', desc: 'Conserve CT, hold current tile, and prepare defense' }
-];
-
-export function getUnitArchetype(unit) {
-  if (!unit) return 'Striker';
-  const job = (unit.job || unit.className || unit.class || '').toLowerCase();
-  if (job.includes('cleric') || job.includes('white') || job.includes('healer') || job.includes('medic')) {
-    return 'Healer';
-  }
-  if (job.includes('paladin') || job.includes('knight') || job.includes('vanguard') || job.includes('guardian') || job.includes('shield')) {
-    return 'Guardian';
-  }
-  if (job.includes('mage') || job.includes('hexer') || job.includes('wizard') || job.includes('arcan')) {
-    return 'Arcanist';
-  }
-  if (job.includes('thief') || job.includes('ninja') || job.includes('trickster') || job.includes('rogue')) {
-    return 'Skirmisher';
-  }
-  if (job.includes('sniper') || job.includes('archer') || job.includes('ranger') || job.includes('deadeye')) {
-    return 'Sharpshooter';
-  }
-  if (job.includes('warlord') || job.includes('commander') || job.includes('boss')) {
-    return 'Commander';
-  }
-  return 'Striker';
-}
-
-export function createDefaultStratagem(unit) {
-  if (typeof CombatRules.createDefaultStratagem === 'function') {
-    try {
-      const s = CombatRules.createDefaultStratagem(unit);
-      if (s) return s;
-    } catch (_) {}
-  }
-
-  const archetype = getUnitArchetype(unit);
-  let defaultRules = [];
-
-  switch (archetype) {
-    case 'Healer':
-      defaultRules = [
-        { id: 'rule-1', enabled: true, condition: 'ally_hp_under_30', action: 'skill_heal_ally', priority: 1 },
-        { id: 'rule-2', enabled: true, condition: 'ally_hp_under_50', action: 'skill_heal_ally', priority: 2 },
-        { id: 'rule-3', enabled: true, condition: 'hp_under_25', action: 'retreat_to_allies', priority: 3 },
-        { id: 'rule-4', enabled: true, condition: 'always', action: 'attack_weakest', priority: 4 }
-      ];
-      break;
-    case 'Guardian':
-      defaultRules = [
-        { id: 'rule-1', enabled: true, condition: 'hp_under_25', action: 'skill_buff_self', priority: 1 },
-        { id: 'rule-2', enabled: true, condition: 'enemy_leader', action: 'focus_boss', priority: 2 },
-        { id: 'rule-3', enabled: true, condition: 'enemy_in_attack_range', action: 'attack_nearest', priority: 3 },
-        { id: 'rule-4', enabled: true, condition: 'always', action: 'advance_flank', priority: 4 }
-      ];
-      break;
-    case 'Arcanist':
-      defaultRules = [
-        { id: 'rule-1', enabled: true, condition: 'hp_under_25', action: 'retreat_to_allies', priority: 1 },
-        { id: 'rule-2', enabled: true, condition: 'enemy_cluster', action: 'skill_burst_damage', priority: 2 },
-        { id: 'rule-3', enabled: true, condition: 'enemy_weakest', action: 'skill_burst_damage', priority: 3 },
-        { id: 'rule-4', enabled: true, condition: 'always', action: 'attack_nearest', priority: 4 }
-      ];
-      break;
-    case 'Sharpshooter':
-    case 'Skirmisher':
-      defaultRules = [
-        { id: 'rule-1', enabled: true, condition: 'hp_under_25', action: 'retreat_to_allies', priority: 1 },
-        { id: 'rule-2', enabled: true, condition: 'enemy_caster', action: 'attack_caster', priority: 2 },
-        { id: 'rule-3', enabled: true, condition: 'enemy_weakest', action: 'attack_weakest', priority: 3 },
-        { id: 'rule-4', enabled: true, condition: 'always', action: 'advance_flank', priority: 4 }
-      ];
-      break;
-    default:
-      defaultRules = [
-        { id: 'rule-1', enabled: true, condition: 'hp_under_25', action: 'retreat_to_allies', priority: 1 },
-        { id: 'rule-2', enabled: true, condition: 'enemy_in_attack_range', action: 'attack_nearest', priority: 2 },
-        { id: 'rule-3', enabled: true, condition: 'enemy_weakest', action: 'attack_weakest', priority: 3 },
-        { id: 'rule-4', enabled: true, condition: 'always', action: 'attack_nearest', priority: 4 }
-      ];
-      break;
-  }
-
-  return {
-    version: '1.0.0',
-    ruleStamp: STRATAGEM_RULE_STAMP,
-    archetype,
-    unitId: unit?.id || 'unit-0',
-    unitName: unit?.name || 'Unit',
-    rules: defaultRules
-  };
-}
-
-export function exportStratagemJSON(unit) {
-  if (typeof CombatRules.exportStratagemJSON === 'function') {
-    try {
-      return CombatRules.exportStratagemJSON(unit);
-    } catch (_) {}
-  }
-  const strat = unit?.stratagem || createDefaultStratagem(unit);
-  return JSON.stringify(strat, null, 2);
-}
-
-export function importStratagemJSON(unit, jsonStr) {
-  if (typeof CombatRules.importStratagemJSON === 'function') {
-    try {
-      return CombatRules.importStratagemJSON(unit, jsonStr);
-    } catch (_) {}
-  }
-  const parsed = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-  if (!parsed || !Array.isArray(parsed.rules)) {
-    throw new Error('Invalid StratagemDocument: rules array required');
-  }
-
-  unit.stratagem = {
-    version: parsed.version || '1.0.0',
-    ruleStamp: parsed.ruleStamp || STRATAGEM_RULE_STAMP,
-    archetype: parsed.archetype || getUnitArchetype(unit),
-    unitId: unit.id,
-    unitName: unit.name,
-    rules: parsed.rules.map((r, i) => ({
-      id: r.id || `rule-${i + 1}`,
-      enabled: r.enabled !== false,
-      condition: r.condition || 'always',
-      action: r.action || 'attack_nearest',
-      priority: i + 1
-    }))
-  };
-  return unit.stratagem;
-}
-
-/**
- * Evaluates the active unit's StratagemDocument against the live battlefield state.
- */
-export function evaluateUnitStratagem(unit, allUnits = [], reachableTiles = [], board = null, activeLaw = null) {
-  if (typeof CombatRules.evaluateUnitStratagem === 'function') {
-    try {
-      const res = CombatRules.evaluateUnitStratagem(unit, allUnits, reachableTiles, board, activeLaw);
-      if (res) return res;
-    } catch (_) {}
-  }
-
-  if (!unit) return null;
-  const strat = unit.stratagem || createDefaultStratagem(unit);
-  if (!strat || !Array.isArray(strat.rules)) return null;
-
-  const isAzure = (unit.team || 'azure').toLowerCase() === 'azure' || (unit.team || '').toLowerCase() === 'blue';
-  const allies = allUnits.filter(
-    (u) =>
-      u.id !== unit.id &&
-      ((u.team || 'azure').toLowerCase() === (isAzure ? 'azure' : 'crimson') ||
-       (u.team || '').toLowerCase() === (isAzure ? 'blue' : 'red')) &&
-      u.alive !== false &&
-      !u.isDead &&
-      !u.inPrison
-  );
-  const enemies = allUnits.filter(
-    (u) =>
-      u.id !== unit.id &&
-      ((u.team || 'azure').toLowerCase() !== (isAzure ? 'azure' : 'crimson') &&
-       (u.team || '').toLowerCase() !== (isAzure ? 'blue' : 'red')) &&
-      u.alive !== false &&
-      !u.isDead &&
-      !u.inPrison &&
-      (u.hp === undefined || u.hp > 0)
-  );
-
-  const unitX = unit.x ?? unit.gridX ?? 0;
-  const unitZ = unit.z ?? unit.gridZ ?? 0;
-  const unitHp = Math.max(0, unit.hp ?? 100);
-  const unitMaxHp = unit.maxHp ?? 100;
-  const unitHpPct = unitHp / unitMaxHp;
-  const unitMp = Math.max(0, unit.mp ?? 40);
-  const attackRange = unit.attackRange || unit.weapon?.attackRange || 1;
-
-  for (let i = 0; i < strat.rules.length; i++) {
-    const rule = strat.rules[i];
-    if (rule.enabled === false) continue;
-
-    let conditionPassed = false;
-
-    switch (rule.condition) {
-      case 'always':
-        conditionPassed = true;
-        break;
-      case 'hp_under_25':
-        conditionPassed = unitHpPct <= 0.25;
-        break;
-      case 'hp_under_50':
-        conditionPassed = unitHpPct <= 0.5;
-        break;
-      case 'mp_under_20':
-        conditionPassed = unitMp < 20;
-        break;
-      case 'ally_hp_under_30':
-        conditionPassed = allies.some((a) => (Math.max(0, a.hp ?? 100) / (a.maxHp ?? 100)) <= 0.3);
-        break;
-      case 'ally_hp_under_50':
-        conditionPassed = allies.some((a) => (Math.max(0, a.hp ?? 100) / (a.maxHp ?? 100)) <= 0.5);
-        break;
-      case 'ally_down':
-        conditionPassed = allUnits.some(
-          (u) =>
-            u.id !== unit.id &&
-            ((u.team || 'azure').toLowerCase() === (isAzure ? 'azure' : 'crimson') ||
-             (u.team || '').toLowerCase() === (isAzure ? 'blue' : 'red')) &&
-            (u.alive === false || u.isDead || (u.hp !== undefined && u.hp <= 0))
-        );
-        break;
-      case 'enemy_in_attack_range':
-        conditionPassed = enemies.some((e) => {
-          const ex = e.x ?? e.gridX ?? 0;
-          const ez = e.z ?? e.gridZ ?? 0;
-          return (Math.abs(ex - unitX) + Math.abs(ez - unitZ)) <= attackRange;
-        });
-        break;
-      case 'enemy_cluster':
-        if (enemies.length >= 2) {
-          for (let a = 0; a < enemies.length; a++) {
-            for (let b = a + 1; b < enemies.length; b++) {
-              const ax = enemies[a].x ?? enemies[a].gridX ?? 0;
-              const az = enemies[a].z ?? enemies[a].gridZ ?? 0;
-              const bx = enemies[b].x ?? enemies[b].gridX ?? 0;
-              const bz = enemies[b].z ?? enemies[b].gridZ ?? 0;
-              if (Math.abs(ax - bx) + Math.abs(az - bz) <= 2) {
-                conditionPassed = true;
-                break;
-              }
-            }
-            if (conditionPassed) break;
-          }
-        }
-        break;
-      case 'enemy_weakest':
-        conditionPassed = enemies.length > 0;
-        break;
-      case 'enemy_caster':
-        conditionPassed = enemies.some((e) => {
-          const c = (e.job || e.className || e.class || '').toLowerCase();
-          return c.includes('mage') || c.includes('hexer') || c.includes('cleric') || c.includes('wizard');
-        });
-        break;
-      case 'enemy_leader':
-        conditionPassed = enemies.some((e) => e.isBoss || e.rank === 'COMMANDER' || e.rank === 'WARLORD');
-        break;
-      case 'enemy_buffed':
-        conditionPassed = enemies.some((e) => e.buffs?.length > 0 || e.statuses?.length > 0);
-        break;
-      case 'standing_on_crystal': {
-        const tile = board?.getTile?.(unitX, unitZ);
-        conditionPassed = tile?.type === 'water' || tile?.isWater || tile?.crystal || tile?.type === 'crystal';
-        break;
-      }
-      case 'law_risk':
-        conditionPassed = !!activeLaw;
-        break;
-      default:
-        conditionPassed = true;
-        break;
-    }
-
-    if (!conditionPassed) continue;
-
-    // Condition met! Resolve Action:
-    const condMeta = STRATAGEM_CONDITIONS.find((c) => c.id === rule.condition) || { label: rule.condition };
-    const actMeta = STRATAGEM_ACTIONS.find((a) => a.id === rule.action) || { label: rule.action };
-
-    let targetUnit = null;
-    let chosenAbility = (unit.abilities && unit.abilities[0]) || { id: 'basic-attack', name: 'Attack', power: 1.0, range: attackRange };
-    let actionType = 'attack';
-    let moveTile = { x: unitX, z: unitZ };
-
-    switch (rule.action) {
-      case 'skill_heal_ally': {
-        const woundedAllies = [...allies].sort(
-          (a, b) => (Math.max(0, a.hp ?? 100) / (a.maxHp ?? 100)) - (Math.max(0, b.hp ?? 100) / (b.maxHp ?? 100))
-        );
-        targetUnit = woundedAllies[0] || unit;
-        actionType = 'ability';
-        chosenAbility = unit.abilities?.find((ab) => ab.isHealing || ab.category === 'heal' || ab.name.includes('Cure') || ab.name.includes('Heal')) || {
-          id: 'first-aid',
-          name: 'First Aid',
-          power: 1.5,
-          isHealing: true,
-          range: 2
-        };
-        break;
-      }
-
-      case 'skill_buff_self': {
-        targetUnit = unit;
-        actionType = 'ability';
-        chosenAbility = unit.abilities?.find((ab) => ab.category === 'buff' || ab.name.includes('Shield') || ab.name.includes('Fortify') || ab.name.includes('Focus')) || {
-          id: 'defend-stance',
-          name: 'Iron Guard',
-          power: 1.0,
-          range: 0
-        };
-        break;
-      }
-
-      case 'skill_burst_damage': {
-        targetUnit = [...enemies].sort((a, b) => (a.hp ?? 100) - (b.hp ?? 100))[0] || null;
-        actionType = 'ability';
-        chosenAbility = unit.abilities?.find((ab) => (ab.power || 1.0) > 1.2) || unit.abilities?.[0] || chosenAbility;
-        break;
-      }
-
-      case 'attack_caster': {
-        const casters = enemies.filter((e) => {
-          const c = (e.job || e.className || e.class || '').toLowerCase();
-          return c.includes('mage') || c.includes('hexer') || c.includes('cleric') || c.includes('wizard');
-        });
-        targetUnit = casters[0] || enemies[0] || null;
-        actionType = 'attack';
-        break;
-      }
-
-      case 'focus_boss': {
-        targetUnit = enemies.find((e) => e.isBoss || e.rank === 'COMMANDER' || e.rank === 'WARLORD') || enemies[0] || null;
-        actionType = 'attack';
-        break;
-      }
-
-      case 'attack_weakest': {
-        targetUnit = [...enemies].sort((a, b) => (a.hp ?? 100) - (b.hp ?? 100))[0] || null;
-        actionType = 'attack';
-        break;
-      }
-
-      case 'retreat_to_allies': {
-        actionType = 'wait';
-        targetUnit = null;
-        // Find reachable tile furthest from enemies or closest to allies
-        if (reachableTiles && reachableTiles.length > 0 && allies.length > 0) {
-          const allyCenter = {
-            x: allies.reduce((s, a) => s + (a.x ?? 0), 0) / allies.length,
-            z: allies.reduce((s, a) => s + (a.z ?? 0), 0) / allies.length
-          };
-          let bestDist = Infinity;
-          for (const t of reachableTiles) {
-            const d = Math.abs(t.x - allyCenter.x) + Math.abs(t.z - allyCenter.z);
-            if (d < bestDist) {
-              bestDist = d;
-              moveTile = t;
-            }
-          }
-        }
-        break;
-      }
-
-      case 'hold_ground': {
-        actionType = 'wait';
-        targetUnit = null;
-        moveTile = { x: unitX, z: unitZ };
-        break;
-      }
-
-      case 'advance_flank':
-      case 'attack_nearest':
-      default: {
-        let bestDist = Infinity;
-        for (const e of enemies) {
-          const ex = e.x ?? e.gridX ?? 0;
-          const ez = e.z ?? e.gridZ ?? 0;
-          const d = Math.abs(ex - unitX) + Math.abs(ez - unitZ);
-          if (d < bestDist) {
-            bestDist = d;
-            targetUnit = e;
-          }
-        }
-        actionType = 'attack';
-        break;
-      }
-    }
-
-    // Determine moveTile to reach target if targetUnit exists and not already in range
-    if (targetUnit && reachableTiles && reachableTiles.length > 0) {
-      const tgtX = targetUnit.x ?? targetUnit.gridX ?? 0;
-      const tgtZ = targetUnit.z ?? targetUnit.gridZ ?? 0;
-      let minDistanceToTarget = Infinity;
-      let candidateTile = moveTile;
-
-      for (const t of reachableTiles) {
-        const d = Math.abs(t.x - tgtX) + Math.abs(t.z - tgtZ);
-        if (d >= 1 && d < minDistanceToTarget) {
-          minDistanceToTarget = d;
-          candidateTile = t;
-        }
-      }
-      if (candidateTile) {
-        moveTile = candidateTile;
-      }
-    }
-
-    return {
-      matchedRule: {
-        index: i,
-        id: rule.id,
-        condition: rule.condition,
-        conditionLabel: condMeta.label,
-        action: rule.action,
-        actionLabel: actMeta.label
-      },
-      moveTile,
-      targetUnit,
-      ability: chosenAbility,
-      actionType
-    };
-  }
-
-  return null;
-}
+export {
+  STRATAGEM_RULE_STAMP,
+  STRATAGEM_CONDITIONS,
+  STRATAGEM_ACTIONS,
+  evaluateLawCompliance,
+  getUnitArchetype,
+  createDefaultStratagem,
+  exportStratagemJSON,
+  importStratagemJSON,
+  evaluateUnitStratagem
+};
 
 /**
  * StratagemModal Class
@@ -934,28 +513,33 @@ export class StratagemModal {
     simBox.className = 'stratagem-sim-box';
 
     if (simResult && simResult.matchedRule) {
-      const { matchedRule, targetUnit, moveTile, ability } = simResult;
+      const { matchedRule, targetUnit, target, moveTile, ability, skill } = simResult;
+      const targetEntity = targetUnit || target;
+      const activeAbility = ability || skill;
+      const condLabel = matchedRule.conditionLabel || matchedRule.label || matchedRule.condition;
+      const actLabel = matchedRule.actionLabel || matchedRule.action;
+      const ruleIdx = matchedRule.index ?? 0;
       simBox.innerHTML = `
         <div class="sim-match-badge match-found">
-          <span>🎯 MATCHED RULE #${matchedRule.index + 1}</span>
+          <span>🎯 MATCHED RULE #${ruleIdx + 1}</span>
           <span style="font-size: 10px;">PRIORITY 1st MATCH</span>
         </div>
         <div class="sim-details-grid">
           <div class="sim-cell">
             <span class="sim-cell-lbl">TRIGGERED CONDITION</span>
-            <span class="sim-cell-val" style="color: #38bdf8;">${matchedRule.conditionLabel}</span>
+            <span class="sim-cell-val" style="color: #38bdf8;">${condLabel}</span>
           </div>
           <div class="sim-cell">
             <span class="sim-cell-lbl">EXECUTED ACTION</span>
-            <span class="sim-cell-val" style="color: #fbbf24;">${matchedRule.actionLabel}</span>
+            <span class="sim-cell-val" style="color: #fbbf24;">${actLabel}</span>
           </div>
           <div class="sim-cell">
             <span class="sim-cell-lbl">TARGET SELECTION</span>
-            <span class="sim-cell-val" style="color: #f43f5e;">${targetUnit ? targetUnit.name : 'Self / Ground'}</span>
+            <span class="sim-cell-val" style="color: #f43f5e;">${targetEntity ? (targetEntity.name || targetEntity.id) : 'Self / Ground'}</span>
           </div>
           <div class="sim-cell">
             <span class="sim-cell-lbl">CHOSEN ABILITY</span>
-            <span class="sim-cell-val" style="color: #34d399;">${ability ? ability.name : 'Basic Attack'}</span>
+            <span class="sim-cell-val" style="color: #34d399;">${activeAbility ? (activeAbility.name || activeAbility.id) : 'Basic Attack'}</span>
           </div>
         </div>
         <div class="sim-tile-coord">

@@ -149,6 +149,29 @@ export function evaluateLawCompliance(attacker, target, actionContext = {}, acti
 }
 
 /**
+ * Computes the strategic Anima Archetype for a unit based on its class/job.
+ * @param {Object} unit
+ * @returns {string} Archetype title
+ */
+export function getUnitArchetype(unit = {}) {
+  const className = unit?.className || unit?.class?.name || unit?.class || unit?.job || 'Knight';
+  const normClass = String(className).replace(/\s+/g, '').toLowerCase();
+
+  if (normClass === 'paladin' || normClass === 'scholar') {
+    return normClass === 'paladin' ? 'Holy Guardian' : 'Arcane Sage';
+  } else if (normClass === 'herald' || normClass === 'mesmer') {
+    return normClass === 'herald' ? 'Cadence Chanter' : 'Mirage Disruptor';
+  } else if (normClass === 'dragoon' || normClass === 'landreaver') {
+    return normClass === 'dragoon' ? 'Sky Lancer' : 'Highland Crusher';
+  } else if (normClass === 'samurai' || normClass === 'berserker') {
+    return normClass === 'samurai' ? 'Iaido Duelist' : 'Blood Frenzy Marauder';
+  } else if (normClass === 'archer' || normClass === 'fusilier') {
+    return normClass === 'archer' ? 'Eagle Eye Marksman' : 'Rifled Overwatch';
+  }
+  return 'Tactical Combatant';
+}
+
+/**
  * Creates a deterministic, class-tailored StratagemDocument for a unit.
  * Paladin/Scholar prioritize ally_dead -> revive_ally and ally_hp_below_50 -> heal_ally;
  * Herald/Mesmer prioritize self_not_channeling -> bard_channel and enemy_recruitable -> talk_recruit;
@@ -481,19 +504,28 @@ export function evaluateUnitStratagem(unit, allUnits = [], reachableTiles = null
     );
 
     if (resolvedAction) {
+      const condObj = STRATAGEM_CONDITIONS.find((c) => c.id === rule.condition);
+      const actObj = STRATAGEM_ACTIONS.find((a) => a.id === rule.action);
+      const conditionLabel = condObj?.label || rule.condition;
+      const actionLabel = actObj?.label || rule.action;
+
       return {
         matchedRule: {
           id: rule.id,
           index: ruleIndex,
           condition: rule.condition,
+          conditionLabel,
           action: rule.action,
-          label: rule.label || `${rule.condition} -> ${rule.action}`
+          actionLabel,
+          label: rule.label || `${conditionLabel} -> ${actionLabel}`
         },
         moveTile: resolvedAction.moveTile,
         actionType: resolvedAction.actionType,
         skill: resolvedAction.skill,
+        ability: resolvedAction.skill, // dual-name compatibility
         targetUnit: resolvedAction.targetUnit,
-        reasoning: `Rule ${rule.id} [${rule.label}]: matched condition '${rule.condition}' -> executed action '${rule.action}' targeting ${resolvedAction.targetUnit?.name || 'self'}`
+        target: resolvedAction.targetUnit, // dual-name compatibility
+        reasoning: `Rule ${rule.id} [${conditionLabel} -> ${actionLabel}]: matched condition '${rule.condition}' -> executed action '${rule.action}' targeting ${resolvedAction.targetUnit?.name || (resolvedAction.actionType === 'wait' ? 'high ground tile' : 'self')}`
       };
     }
     // If resolvedAction is null (e.g. no targets in range), fall through to the next rule!
@@ -505,7 +537,9 @@ export function evaluateUnitStratagem(unit, allUnits = [], reachableTiles = null
     moveTile: currentTile,
     actionType: 'wait',
     skill: null,
+    ability: null,
     targetUnit: null,
+    target: null,
     reasoning: 'No Stratagem rules matched or yielded valid in-range actions; waiting.'
   };
 }

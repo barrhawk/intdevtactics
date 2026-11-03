@@ -363,6 +363,9 @@ class TacticsGame {
         if (Array.isArray(parsed.playerInventory) && parsed.playerInventory.length > 0) {
           this.playerInventory = parsed.playerInventory;
         }
+        if (Array.isArray(parsed.clanRoster) && parsed.clanRoster.length > 0) {
+          this.clanRoster = parsed.clanRoster.map((u) => ensureUnitSetWorldData(u));
+        }
       }
     } catch (err) {
       console.warn('[TacticsGame] Error loading saved clan state:', err);
@@ -373,7 +376,8 @@ class TacticsGame {
     try {
       const data = {
         playerOrbs: this.playerOrbs,
-        playerInventory: this.playerInventory
+        playerInventory: this.playerInventory,
+        clanRoster: this.clanRoster || []
       };
       localStorage.setItem('intdevtactics_clan_save_v1', JSON.stringify(data));
     } catch (err) {
@@ -1224,6 +1228,24 @@ class TacticsGame {
           this.stageUnitManager.spawnLootBag?.(atkX, atkZ, this.isometricBoard, { orbs: 1 });
           this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
 
+          // If attacker was on crimson team, harvest drop orbs!
+          const isEnemyDefeated = (attacker.team || '').toLowerCase() === 'crimson' || (attacker.team || '').toLowerCase() === 'red';
+          if (isEnemyDefeated) {
+            const dropResult = calculateEnemyDropOrbs(attacker, this.baseSeed);
+            const dropOrbs = typeof dropResult === 'number' ? dropResult : (dropResult?.dropOrbs ?? dropResult?.orbs ?? 35);
+            this.playerOrbs += dropOrbs;
+            this.statsSummary.orbsWon = (this.statsSummary.orbsWon || 0) + dropOrbs;
+            this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+            this._saveClanState();
+            if (this.forgeModal) {
+              this.forgeModal.updateState({ orbs: this.playerOrbs });
+            }
+            this.tacticalHud.addLog(
+              `💎 [/api/drop] Harvested +${dropOrbs} Set Orbs from counter-slain ${attacker.name}!`,
+              'loot'
+            );
+          }
+
           if (this._checkBattleOutcome()) return;
           this.turnManager.endTurn(attacker, true, true);
           this.advanceTurn();
@@ -1553,12 +1575,14 @@ class TacticsGame {
       let decision;
 
       if (stratagemDecision && stratagemDecision.matchedRule) {
-        const { matchedRule, moveTile, targetUnit, ability, actionType } = stratagemDecision;
-        const condLbl = matchedRule.conditionLabel || matchedRule.condition;
+        const { matchedRule, moveTile, targetUnit, target, ability, skill, actionType } = stratagemDecision;
+        const condLbl = matchedRule.conditionLabel || matchedRule.label || matchedRule.condition;
         const actLbl = matchedRule.actionLabel || matchedRule.action;
+        const chosenTarget = targetUnit || target;
+        const chosenAbility = ability || skill;
 
         this.tacticalHud.addLog(
-          `🧠 [STRATAGEM #${matchedRule.index + 1}] ${aiUnit.name}: IF ${condLbl} ➔ ${actLbl}`,
+          `🧠 [STRATAGEM #${(matchedRule.index ?? 0) + 1}] ${aiUnit.name}: IF ${condLbl} ➔ ${actLbl}`,
           'system'
         );
 
@@ -1567,13 +1591,18 @@ class TacticsGame {
         const destTile = moveTile || startTile;
 
         if (destTile.x !== startTile.x || destTile.z !== startTile.z) {
-          movePath = this.turnManager.findPath(
-            startTile,
-            destTile,
-            this.isometricBoard,
-            this.units,
-            aiUnit
-          );
+          const matchedReachable = reachableTiles?.find((t) => t.x === destTile.x && t.z === destTile.z);
+          if (matchedReachable?.path && matchedReachable.path.length > 0) {
+            movePath = matchedReachable.path;
+          } else if (typeof this.turnManager?.findPath === 'function') {
+            movePath = this.turnManager.findPath(
+              startTile,
+              destTile,
+              this.isometricBoard,
+              this.units,
+              aiUnit
+            );
+          }
           if (!movePath || movePath.length === 0) {
             movePath = [startTile, destTile];
           }
@@ -1582,8 +1611,8 @@ class TacticsGame {
         decision = {
           moveTile: destTile,
           movePath,
-          ability: actionType !== 'wait' ? (ability || aiUnit.abilities?.[0]) : null,
-          targetUnit: actionType !== 'wait' ? targetUnit : null
+          ability: actionType !== 'wait' ? (chosenAbility || aiUnit.abilities?.[0]) : null,
+          targetUnit: actionType !== 'wait' ? chosenTarget : null
         };
       } else {
         // Fall back gracefully to the existing AI logic
@@ -1804,6 +1833,24 @@ class TacticsGame {
             this.stageUnitManager.spawnLootBag?.(aX, aZ, this.isometricBoard, { orbs: 1 });
             this.tacticalHud.updateOverheadBars(this.units, this.projectWorldToScreen);
 
+            const isEnemyDefeated = (aiUnit.team || '').toLowerCase() === 'crimson' || (aiUnit.team || '').toLowerCase() === 'red';
+            if (isEnemyDefeated) {
+              const dropResult = calculateEnemyDropOrbs(aiUnit, this.baseSeed);
+              const dropOrbs = typeof dropResult === 'number' ? dropResult : (dropResult?.dropOrbs ?? dropResult?.orbs ?? 35);
+              this.playerOrbs += dropOrbs;
+              this.statsSummary.orbsWon = (this.statsSummary.orbsWon || 0) + dropOrbs;
+              this.tacticalHud.setHeaderState({ orbs: this.playerOrbs });
+              this._saveClanState();
+              this._saveClanState();
+              if (this.forgeModal) {
+                this.forgeModal.updateState({ orbs: this.playerOrbs });
+              }
+              this.tacticalHud.addLog(
+                `💎 [/api/drop] Harvested +${dropOrbs} Set Orbs from counter-slain ${aiUnit.name}!`,
+                'loot'
+              );
+            }
+
             if (this._checkBattleOutcome()) {
               this._isProcessingTurn = false;
               return;
@@ -1872,6 +1919,7 @@ class TacticsGame {
                 `✦ [/api/drop] Enemy ${target.name} defeated! Set.world 9-stat drop computed: +${dropOrbs} Orbs!`,
                 'loot'
               );
+              this._saveClanState();
               if (this.forgeModal) {
                 this.forgeModal.updateState({ orbs: this.playerOrbs });
               }
@@ -2196,7 +2244,7 @@ class TacticsGame {
       this.forgeModal.updateState({ orbs: this.playerOrbs, inventory: this.playerInventory });
 
       this.tacticalHud.addLog(
-        `👑 [/api/craft?tier=${tier}] Guaranteed ${forgedItem.name} [${(forgedItem.equippedSlot || forgedItem.type).toUpperCase()}] synthesized (-${cost} Orbs)!`,
+        `👑 [/api/craft?tier=${tier}] Guaranteed ${forgedItem.name} [${String(forgedItem.equippedSlot || forgedItem.type || forgedItem.slot || 'tool').toUpperCase()}] synthesized (-${cost} Orbs)!`,
         'loot'
       );
 
@@ -2790,10 +2838,16 @@ class TacticsGame {
 }
 
 // Bootstrap master game on DOMContentLoaded or immediate execution
+function initGame() {
+  const g = new TacticsGame();
+  window.tacticsApp = g;
+  window.tacticsGame = g;
+  window.game = g;
+  return g;
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    window.tacticsApp = new TacticsGame();
-  });
+  document.addEventListener('DOMContentLoaded', initGame);
 } else {
-  window.tacticsApp = new TacticsGame();
+  initGame();
 }
