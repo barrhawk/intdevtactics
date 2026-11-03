@@ -19,6 +19,8 @@ import { counterHop, COUNTER_TICKS, COUNTER_ANCHOR_PX, LAYER_TINTS } from '@engi
 import { readSheetAlpha, BODY_PX_ACROSS, BODY_PX_UP } from '@engine/physics/sprite-body';
 import { createBodyResources } from '@engine/debug/physics-body-mesh';
 
+export const HURT_SHIVER_DELAYS = [20, 40, 40, 20];
+
 export { BOW_SPEC, createBow, bendAt, simulateShot, createBowMesh, createArrowGeometries, createArrowMesh, solveArc };
 export { CLOTH_BAG_SPEC, createClothBag, resetClothBag, whipClothBag, stepClothBag, createClothBagMesh };
 export { ITEM_FACES, createItemFinishBake };
@@ -328,6 +330,566 @@ export const PALETTE_MAPPINGS = {
   }
 };
 
+export class UnitActor {
+  constructor(options = {}) {
+    this.unit = options.unit || {};
+    this.team = options.team || 'azure';
+    this.paletteId = options.paletteId || 'azure_knight';
+    this.actorScale = options.actorScale || 1.0;
+    this.sprite = options.sprite || null;
+    this.root = options.sprite?.group || options.root || null;
+    this.ring = options.ring || null;
+    this.ringMesh = options.ring || null;
+    this.bossCrown = options.bossCrown || null;
+    this.idleWeaponMesh = options.idleWeaponMesh || null;
+    this.carriedMesh = options.carriedMesh || null;
+    this.hitboxMesh = options.hitboxMesh || null;
+    this.groundY = options.groundY || 0;
+    this.inWater = options.inWater || false;
+    this.spawnRefs = options.spawnRefs || null;
+    this.spawnStartTime = options.spawnStartTime || 0;
+    this.spawnProgress = options.spawnProgress || 0.0;
+    this.statusRingMesh = null;
+    this.channelingRingMesh = null;
+    this.physicsHullMesh = null;
+    this._materialProxy = options._materialProxy || null;
+    this.manager = options.manager || null;
+  }
+
+  setDirection(newDir) {
+    const idx = toFacingIndex(newDir);
+    if (this.sprite?.setFacing) {
+      this.sprite.setFacing(idx);
+    } else if (this.sprite?.player) {
+      this.sprite.player.facing = idx;
+    }
+    if (this.unit) {
+      this.unit.facing = FACING_INDEX_TO_NAME[idx];
+    }
+  }
+
+  setFacing(newDir) {
+    this.setDirection(newDir);
+  }
+
+  /**
+   * Sets direction to newDir, plays 'Rotate' (120ms) then restores idle animation.
+   * Gives authentic Wait compass rotation feedback.
+   * @param {string|number} newDir
+   */
+  async playRotateStep(newDir) {
+    this.setDirection(newDir);
+    const now = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    try {
+      this.sprite.play('Rotate', now, { loop: false });
+    } catch {
+      try {
+        this.sprite.play('Rotation', now, { loop: false });
+      } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 120));
+
+    const hp = this.unit.hp ?? this.unit.currentHp ?? 100;
+    const maxHp = this.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    const endNow = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    this.sprite.play(isLowHp ? 'Critical' : 'Idle', endNow, { loop: true });
+  }
+
+  /**
+   * Plays hurt reaction animation. If isCrit is true, applies Jimmy Lee's
+   * HURT_SHIVER_DELAYS ([20, 40, 40, 20] ms) lateral sprite shiver offsets!
+   * @param {boolean} [isCrit=false]
+   */
+  async playHurt(isCrit = false) {
+    const now = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    const root = this.root || this.sprite?.group;
+    const origX = root ? root.position.x : 0;
+
+    if (isCrit) {
+      try {
+        this.sprite.play('Damaged Shaking', now, { loop: false });
+      } catch {
+        try {
+          this.sprite.play('Fall Critical', now, { loop: false });
+        } catch {
+          this.sprite.play('Taking Damage', now, { loop: false });
+        }
+      }
+
+      // Jimmy Lee's HURT_SHIVER_DELAYS lateral sprite shiver offsets
+      const offsets = [1.8, -1.8, 1.2, -1.2];
+      for (let i = 0; i < HURT_SHIVER_DELAYS.length; i++) {
+        if (root) root.position.x = origX + offsets[i % offsets.length];
+        await new Promise((r) => setTimeout(r, HURT_SHIVER_DELAYS[i]));
+      }
+      if (root) root.position.x = origX;
+    } else {
+      try {
+        this.sprite.play('Taking Damage', now, { loop: false });
+      } catch {
+        try {
+          this.sprite.play('Flinch', now, { loop: false });
+        } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 160));
+    }
+
+    const hp = this.unit.hp ?? this.unit.currentHp ?? 100;
+    const maxHp = this.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    const endNow = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    if (!this.unit.isDead && this.unit.alive !== false) {
+      this.sprite.play(isLowHp ? 'Critical' : 'Idle', endNow, { loop: true });
+    }
+  }
+
+  /**
+   * Plays escalating combo attack sequences based on comboTier:
+   * Tier 1: 'Pummel'
+   * Tier 2: 'Pummel' (fast) -> 'Pummel 2'
+   * Tier 3: 'Pummel' -> 'Pummel 2' -> 'Spin Punch' (with golden shockwave ring!)
+   * @param {UnitActor|Object} defenderActor
+   * @param {number} [comboTier=1]
+   */
+  async playComboAttack(defenderActor, comboTier = 1) {
+    if (!defenderActor) return;
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+
+    const defUnit = defenderActor.unit || defenderActor;
+    if (this.manager?.board?.getFacingBetween && this.unit && defUnit) {
+      const facing = this.manager.board.getFacingBetween(this.unit.x, this.unit.z, defUnit.x, defUnit.z);
+      if (facing) this.setDirection(facing);
+    }
+
+    if (comboTier <= 1) {
+      this.sprite.play('Pummel', getNow(), { loop: false });
+      await new Promise((r) => setTimeout(r, 140));
+      defenderActor.playHurt?.(false);
+      await new Promise((r) => setTimeout(r, 180));
+    } else if (comboTier === 2) {
+      this.sprite.play('Pummel', getNow(), { loop: false });
+      await new Promise((r) => setTimeout(r, 120));
+      defenderActor.playHurt?.(false);
+      await new Promise((r) => setTimeout(r, 80));
+
+      this.sprite.play('Pummel 2', getNow(), { loop: false });
+      await new Promise((r) => setTimeout(r, 140));
+      defenderActor.playHurt?.(true);
+      await new Promise((r) => setTimeout(r, 160));
+    } else {
+      this.sprite.play('Pummel', getNow(), { loop: false });
+      await new Promise((r) => setTimeout(r, 110));
+      defenderActor.playHurt?.(false);
+      await new Promise((r) => setTimeout(r, 70));
+
+      this.sprite.play('Pummel 2', getNow(), { loop: false });
+      await new Promise((r) => setTimeout(r, 120));
+      defenderActor.playHurt?.(false);
+      await new Promise((r) => setTimeout(r, 80));
+
+      this.sprite.play('Spin Punch', getNow(), { loop: false });
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Golden shockwave ring on defender
+      const parent = this.root?.parent || defenderActor.root?.parent;
+      const defRoot = defenderActor.root || defenderActor.sprite?.group;
+      if (parent && defRoot) {
+        const ringGeo = new THREE.RingGeometry(1.0, 4.5, 32);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.95,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        const shockRing = new THREE.Mesh(ringGeo, ringMat);
+        shockRing.rotation.x = -Math.PI / 2;
+        shockRing.position.set(defRoot.position.x, (defenderActor.groundY ?? defRoot.position.y) + 0.25, defRoot.position.z);
+        parent.add(shockRing);
+
+        const startT = getNow();
+        const animShock = () => {
+          const elapsed = getNow() - startT;
+          const s = Math.min(1.0, elapsed / 0.35);
+          const scale = 1.0 + s * 2.8;
+          shockRing.scale.set(scale, scale, 1);
+          ringMat.opacity = Math.max(0, 0.95 * (1 - s));
+          if (s < 1.0) {
+            setTimeout(animShock, 16);
+          } else {
+            parent.remove(shockRing);
+            ringGeo.dispose();
+            ringMat.dispose();
+          }
+        };
+        animShock();
+      }
+
+      defenderActor.playHurt?.(true);
+      await new Promise((r) => setTimeout(r, 220));
+    }
+
+    const hp = this.unit.hp ?? this.unit.currentHp ?? 100;
+    const maxHp = this.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    this.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow(), { loop: true });
+  }
+
+  /**
+   * Plays Bard / Dancer performance. Temporarily equips 3D 'harp' if needed,
+   * plays 'Play Instrument' / 'Singing' (or 'Spin Dance' / 'Dancing'), and spawns
+   * expanding musical/mirage aura rings across affected targets.
+   * @param {Object} skill
+   * @param {Array<UnitActor>} [targetActors=[]]
+   */
+  async playBardPerformance(skill, targetActors = []) {
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+    const isHarp = skill?.weaponOverride === 'harp' || skill?.id === 'bard_anthem' || skill?.harp;
+    const isDancer = skill?.id === 'dancer_allure' || skill?.dancer || skill?.dance;
+
+    let tempHarp = null;
+    if (isHarp && this.manager) {
+      if (this.idleWeaponMesh) this.idleWeaponMesh.visible = false;
+      tempHarp = this.manager.createWeaponMesh('harp', this.team);
+      if (tempHarp) {
+        this.root?.parent?.add(tempHarp);
+        this.carriedMesh = tempHarp;
+        try {
+          this.sprite.carry(tempHarp, 'Play Instrument');
+        } catch {
+          if (this.root) tempHarp.position.set(this.root.position.x, this.root.position.y + 6, this.root.position.z);
+        }
+      }
+    }
+
+    const anim = isDancer ? 'Spin Dance' : 'Play Instrument';
+    try {
+      this.sprite.play(anim, getNow(), { loop: true });
+    } catch {
+      try {
+        this.sprite.play(isDancer ? 'Dancing' : 'Singing', getNow(), { loop: true });
+      } catch {}
+    }
+
+    // Expanding musical/mirage aura rings across target actors
+    const auraTargets = (targetActors && targetActors.length) ? targetActors : [this];
+    const auraColor = isDancer ? 0xf43f5e : 0x38bdf8;
+    const parent = this.root?.parent;
+
+    if (parent) {
+      for (const tgt of auraTargets) {
+        const tRoot = tgt.root || tgt.sprite?.group;
+        const pos = tRoot ? tRoot.position : (this.root ? this.root.position : new THREE.Vector3());
+        const ringGeo = new THREE.RingGeometry(0.8, 3.2, 32);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: auraColor,
+          transparent: true,
+          opacity: 0.9,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        const auraMesh = new THREE.Mesh(ringGeo, ringMat);
+        auraMesh.rotation.x = -Math.PI / 2;
+        auraMesh.position.set(pos.x, (tgt.groundY ?? pos.y) + 0.22, pos.z);
+        parent.add(auraMesh);
+
+        const startT = getNow();
+        const expandAura = () => {
+          const elapsed = getNow() - startT;
+          const s = Math.min(1.0, elapsed / 0.55);
+          const scale = 1.0 + s * 2.4;
+          auraMesh.scale.set(scale, scale, 1);
+          ringMat.opacity = Math.max(0, 0.9 * (1 - s));
+          if (s < 1.0) {
+            setTimeout(expandAura, 16);
+          } else {
+            parent.remove(auraMesh);
+            ringGeo.dispose();
+            ringMat.dispose();
+          }
+        };
+        expandAura();
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, 650));
+
+    if (tempHarp) {
+      this.sprite.release?.();
+      if (parent) parent.remove(tempHarp);
+      tempHarp.geometry?.dispose?.();
+      tempHarp.material?.dispose?.();
+      this.carriedMesh = null;
+      if (this.idleWeaponMesh && !this.unit.isDead) this.idleWeaponMesh.visible = true;
+    }
+
+    const hp = this.unit.hp ?? this.unit.currentHp ?? 100;
+    const maxHp = this.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    this.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow(), { loop: true });
+  }
+
+  /**
+   * Syncs status visual effects. If unit is channeling, shows glowing golden/cyan
+   * channeling ring and keeps idle pose set to 'Singing' or 'Dancing'.
+   * @param {Object} [unit=this.unit]
+   */
+  syncStatusVisuals(unit = this.unit) {
+    this.unit = unit;
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+
+    // 1. Channeling Visuals
+    if (unit.channeling && unit.channeling.turnsLeft > 0) {
+      if (!this.channelingRingMesh && this.root?.parent) {
+        const ringGeo = new THREE.RingGeometry(4.5, 7.5, 24);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.85,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        this.channelingRingMesh = new THREE.Mesh(ringGeo, ringMat);
+        this.channelingRingMesh.rotation.x = -Math.PI / 2;
+        this.channelingRingMesh.position.set(this.root.position.x, this.groundY + 0.18, this.root.position.z);
+        this.root.parent.add(this.channelingRingMesh);
+      }
+      const chanAnim = unit.channeling.animation || (unit.channeling.skillId === 'dancer_allure' ? 'Spin Dance' : 'Singing');
+      try {
+        this.sprite.play(chanAnim, getNow(), { loop: true });
+      } catch {
+        try { this.sprite.play('Singing', getNow(), { loop: true }); } catch {}
+      }
+      return;
+    } else if (this.channelingRingMesh) {
+      if (this.channelingRingMesh.parent) this.channelingRingMesh.parent.remove(this.channelingRingMesh);
+      this.channelingRingMesh.geometry?.dispose?.();
+      this.channelingRingMesh.material?.dispose?.();
+      this.channelingRingMesh = null;
+    }
+
+    // 2. Delegate standard tactical RPG statuses to manager
+    if (this.manager) {
+      this.manager.setUnitStatus(this.unit, this.unit.status || null);
+    }
+  }
+
+  /**
+   * Plays Talk Skill on attacker, projects golden persuasion wave rings toward defenderActor.
+   * If recruited === true, switches defenderActor's team, updates ringMesh color to player cyan/gold (0x38bdf8),
+   * and plays 'Jump' / 'Raise Hands' celebration on the newly recruited ally!
+   * @param {UnitActor} defenderActor
+   * @param {boolean} [recruited=false]
+   */
+  async playTalkSkill(defenderActor, recruited = false) {
+    if (!defenderActor) return;
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+
+    const defUnit = defenderActor.unit || defenderActor;
+    if (this.manager?.board?.getFacingBetween && this.unit && defUnit) {
+      const facing = this.manager.board.getFacingBetween(this.unit.x, this.unit.z, defUnit.x, defUnit.z);
+      if (facing) this.setDirection(facing);
+    }
+
+    try {
+      this.sprite.play('Talk Skill', getNow(), { loop: false });
+    } catch {
+      try { this.sprite.play('Talk', getNow(), { loop: false }); } catch {
+        this.sprite.play('Idle', getNow());
+      }
+    }
+
+    // Golden persuasion wave rings toward defenderActor
+    const parent = this.root?.parent || defenderActor.root?.parent;
+    const defRoot = defenderActor.root || defenderActor.sprite?.group;
+    if (parent && this.root && defRoot) {
+      const pAtt = this.root.position;
+      const pDef = defRoot.position;
+
+      for (let r = 0; r < 3; r++) {
+        const ringGeo = new THREE.RingGeometry(0.8, 2.5, 24);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.85,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        const wave = new THREE.Mesh(ringGeo, ringMat);
+        wave.rotation.x = -Math.PI / 2;
+        parent.add(wave);
+
+        const delay = r * 100;
+        setTimeout(() => {
+          const startT = getNow();
+          const animWave = () => {
+            const elapsed = getNow() - startT;
+            const s = Math.min(1.0, elapsed / 0.35);
+            wave.position.lerpVectors(pAtt, pDef, s);
+            wave.position.y += Math.sin(s * Math.PI) * 4;
+            const scale = 1.0 + s * 1.5;
+            wave.scale.set(scale, scale, 1);
+            ringMat.opacity = Math.max(0, 0.85 * (1 - s * 0.7));
+            if (s < 1.0) {
+              setTimeout(animWave, 16);
+            } else {
+              parent.remove(wave);
+              ringGeo.dispose();
+              ringMat.dispose();
+            }
+          };
+          animWave();
+        }, delay);
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, 450));
+
+    if (recruited) {
+      defenderActor.team = this.team;
+      if (defenderActor.unit) {
+        defenderActor.unit.team = this.team;
+        defenderActor.unit.clan = this.team === 'azure' ? 'blue' : 'red';
+      }
+
+      // Update ringMesh material color to player cyan/gold (0x38bdf8)
+      if (defenderActor.ringMesh?.material?.color) {
+        defenderActor.ringMesh.material.color.setHex(0x38bdf8);
+      } else if (defenderActor.ring?.material?.color) {
+        defenderActor.ring.material.color.setHex(0x38bdf8);
+      }
+
+      // Celebration animation
+      try {
+        defenderActor.sprite.play('Jump', getNow(), { loop: false });
+      } catch {
+        try {
+          defenderActor.sprite.play('Raise Hands', getNow(), { loop: false });
+        } catch {
+          try { defenderActor.sprite.play('Found Item', getNow(), { loop: false }); } catch {}
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 380));
+      defenderActor.sprite.play('Idle', getNow(), { loop: true });
+    }
+
+    const hp = this.unit.hp ?? this.unit.currentHp ?? 100;
+    const maxHp = this.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    this.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow(), { loop: true });
+  }
+
+  /**
+   * Samurai counter-attack: plays rapid white metallic parry flash on Samurai defender
+   * and executes a quick 'Slash' counter-strike against attackerActor.
+   * @param {UnitActor} attackerActor
+   */
+  async playSamuraiCounter(attackerActor) {
+    if (!attackerActor) return;
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+
+    // Rapid white metallic parry flash
+    const parent = this.root?.parent;
+    if (parent && this.root) {
+      const flashGeo = new THREE.PlaneGeometry(16, 28);
+      const flashMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const flashMesh = new THREE.Mesh(flashGeo, flashMat);
+      flashMesh.position.copy(this.root.position);
+      flashMesh.position.y += 10;
+      parent.add(flashMesh);
+
+      setTimeout(() => {
+        parent.remove(flashMesh);
+        flashGeo.dispose();
+        flashMat.dispose();
+      }, 80);
+    }
+
+    const attUnit = attackerActor.unit || attackerActor;
+    if (this.manager?.board?.getFacingBetween && this.unit && attUnit) {
+      const facing = this.manager.board.getFacingBetween(this.unit.x, this.unit.z, attUnit.x, attUnit.z);
+      if (facing) this.setDirection(facing);
+    }
+
+    try {
+      this.sprite.play('Slash', getNow(), { loop: false });
+    } catch {
+      try { this.sprite.play('Katana Use', getNow(), { loop: false }); } catch {
+        this.sprite.play('Swing High', getNow(), { loop: false });
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, 140));
+    attackerActor.playHurt?.(false);
+    await new Promise((r) => setTimeout(r, 220));
+
+    const hp = this.unit.hp ?? this.unit.currentHp ?? 100;
+    const maxHp = this.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    this.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow(), { loop: true });
+  }
+
+  /**
+   * Hot-swaps a1.png with a custom uploaded sprite sheet image/canvas/texture,
+   * clearing the tintedTextureCache and re-tinting every active UnitActor live!
+   * @param {THREE.Texture|HTMLImageElement|HTMLCanvasElement|string} textureOrDataUrl
+   * @param {Array<UnitActor>} [allActors=[]]
+   * @returns {Promise<THREE.Texture|null>}
+   */
+  static async applyCustomSpriteSheet(textureOrDataUrl, allActors = []) {
+    let texture = null;
+    if (textureOrDataUrl && textureOrDataUrl.isTexture) {
+      texture = textureOrDataUrl;
+    } else if (typeof textureOrDataUrl === 'string') {
+      const loader = new THREE.TextureLoader();
+      texture = await loader.loadAsync(textureOrDataUrl);
+    } else if (typeof HTMLCanvasElement !== 'undefined' && textureOrDataUrl instanceof HTMLCanvasElement) {
+      texture = new THREE.CanvasTexture(textureOrDataUrl);
+    } else if (typeof HTMLImageElement !== 'undefined' && textureOrDataUrl instanceof HTMLImageElement) {
+      texture = new THREE.Texture(textureOrDataUrl);
+      texture.needsUpdate = true;
+    }
+
+    if (!texture) return null;
+
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+
+    // Hot-swap across all active actors
+    for (const actor of allActors) {
+      if (actor?.manager?.paletteCache) {
+        actor.manager.paletteCache.clear();
+      }
+      if (actor?.manager?.tintedTextureCache) {
+        actor.manager.tintedTextureCache.clear();
+      }
+      if (actor?.sprite?.textures) {
+        actor.sprite.textures.color = texture;
+      }
+      if (actor?.sprite?.group) {
+        actor.sprite.group.traverse((obj) => {
+          if (obj.isMesh && obj.material && obj.material.map) {
+            obj.material.map = texture;
+            obj.material.needsUpdate = true;
+          }
+        });
+      }
+    }
+
+    return texture;
+  }
+}
+
 export class StageUnitManager {
   /**
    * @param {THREE.Scene} scene
@@ -344,6 +906,7 @@ export class StageUnitManager {
     this.sheet = null;
     this.rawImage = null;
     this.paletteCache = new Map();
+    this.tintedTextureCache = this.paletteCache;
 
     this.marbleTexture = null;
     this.marbleMesh = null;
@@ -944,7 +1507,7 @@ export class StageUnitManager {
         unit.facing = FACING_INDEX_TO_NAME[idx];
       };
 
-      const actor = {
+      const actor = new UnitActor({
         unit,
         team,
         paletteId,
@@ -960,10 +1523,8 @@ export class StageUnitManager {
         spawnRefs,
         spawnStartTime: typeof performance !== 'undefined' ? performance.now() / 1000 : 0,
         spawnProgress: 0.0,
-        statusRingMesh: null,
-        physicsHullMesh: null,
-        _materialProxy: null
-      };
+        manager: this
+      });
 
       const origPlay = sprite.play.bind(sprite);
       sprite.play = (anim, at, opts = {}) => {
@@ -2238,6 +2799,51 @@ export class StageUnitManager {
     }
   }
 
+  async playRotateStep(unitOrId, newDir) {
+    const actor = this._getActor(unitOrId);
+    if (actor?.playRotateStep) return await actor.playRotateStep(newDir);
+  }
+
+  async playHurt(unitOrId, isCrit = false) {
+    const actor = this._getActor(unitOrId);
+    if (actor?.playHurt) return await actor.playHurt(isCrit);
+  }
+
+  async playComboAttack(attackerOrId, defenderOrId, comboTier = 1) {
+    const att = this._getActor(attackerOrId);
+    const def = this._getActor(defenderOrId);
+    if (att?.playComboAttack) return await att.playComboAttack(def, comboTier);
+  }
+
+  async playBardPerformance(performerOrId, skill, targetActors = []) {
+    const actor = this._getActor(performerOrId);
+    const tgts = targetActors.map((t) => this._getActor(t) || t);
+    if (actor?.playBardPerformance) return await actor.playBardPerformance(skill, tgts);
+  }
+
+  syncStatusVisuals(unitOrId) {
+    const actor = this._getActor(unitOrId);
+    if (actor?.syncStatusVisuals) {
+      actor.syncStatusVisuals(actor.unit);
+    }
+  }
+
+  async playTalkSkill(attackerOrId, defenderOrId, recruited = false) {
+    const att = this._getActor(attackerOrId);
+    const def = this._getActor(defenderOrId);
+    if (att?.playTalkSkill) return await att.playTalkSkill(def, recruited);
+  }
+
+  async playSamuraiCounter(defenderOrId, attackerOrId) {
+    const def = this._getActor(defenderOrId);
+    const att = this._getActor(attackerOrId);
+    if (def?.playSamuraiCounter) return await def.playSamuraiCounter(att);
+  }
+
+  async applyCustomSpriteSheet(textureOrDataUrl) {
+    return await UnitActor.applyCustomSpriteSheet(textureOrDataUrl, Array.from(this.units.values()));
+  }
+
   /**
    * Smooth PS1 / FFTA Bayer dithered teleport effect between two positions.
    * @param {string|number|Object} unitOrId
@@ -2397,6 +3003,9 @@ export class StageUnitManager {
       // Rotate status aura ring if active
       if (actor.statusRingMesh) {
         actor.statusRingMesh.rotation.z += dt * 0.8;
+      }
+      if (actor.channelingRingMesh) {
+        actor.channelingRingMesh.rotation.z += dt * 1.2;
       }
 
       // Grounded team indicator ring
