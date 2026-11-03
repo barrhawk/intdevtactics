@@ -10,8 +10,32 @@ import { solveArc } from '@engine/weapons/ballistics';
 import { defaultGravity, spawnFadeMs, despawnFadeMs } from '@engine/constants/physics';
 import { CLOTH_BAG_SPEC, createClothBag, resetClothBag, whipClothBag, stepClothBag } from '@engine/weapons/cloth-bag';
 import { createClothBagResources, createClothBagMesh, syncClothBagMesh } from '@engine/weapons/cloth-bag-mesh';
-import { ITEM_FACES, applyItemFaces as _applyItemFaces, createItemFinishBake } from '@engine/weapons/item-finish';
-import { patchGroupSpawnMaterials, updateSpawnProgress, computeSpawnProgress } from '@engine/meshes/spawn-effect';
+import {
+  ITEM_FACES,
+  createItemFinishBake,
+  applyItemFaces,
+  applyMythrilVeins,
+  bakeRoomEnvironment,
+  createMuzzleFlashMesh,
+  createVolumetricStreakMesh,
+  PLATE,
+  BACK,
+  PAGES,
+  SHIELD_BACK_COLOR,
+  PAGE_COLOR,
+  MYTHRIL_INLAY,
+  CRIMSON_INLAY,
+} from './item-finish-bake.js';
+import {
+  patchSpawnMaterial,
+  patchGroupSpawnMaterials,
+  updateSpawnProgress,
+  computeSpawnProgress,
+  computeDespawnProgress,
+  animateSpawnDither,
+} from './spawn-dither.js';
+import { HAND_GRIPS, HAND_RESTS } from '../three-isometric-engine/constants/sprites/assembly.js';
+import { HELD_ITEM_SCALE } from '../three-isometric-engine/weapons/held-items.js';
 
 // Sprint 3 Engine Upgrades: Marble, Hopping Damage Counter, Physics Hull & Sprite Layer Inspector
 import { prepareBlackMarbleTexture, createBlackMarbleMaterial } from '@engine/debug/marble-material';
@@ -23,26 +47,60 @@ export const HURT_SHIVER_DELAYS = [20, 40, 40, 20];
 
 export { BOW_SPEC, createBow, bendAt, simulateShot, createBowMesh, createArrowGeometries, createArrowMesh, solveArc };
 export { CLOTH_BAG_SPEC, createClothBag, resetClothBag, whipClothBag, stepClothBag, createClothBagMesh };
-export { ITEM_FACES, createItemFinishBake };
+export {
+  ITEM_FACES,
+  createItemFinishBake,
+  applyItemFaces,
+  applyMythrilVeins,
+  bakeRoomEnvironment,
+  createMuzzleFlashMesh,
+  createVolumetricStreakMesh,
+  patchSpawnMaterial,
+  patchGroupSpawnMaterials,
+  updateSpawnProgress,
+  computeSpawnProgress,
+  computeDespawnProgress,
+  animateSpawnDither,
+  HAND_GRIPS,
+  HAND_RESTS,
+  HELD_ITEM_SCALE,
+};
 
-/**
- * Universal wrapper for applyItemFaces supporting both:
- * applyItemFaces(material, bake, itemName)
- * and applyItemFaces(material, face, { plate, inside })
- */
-export function applyItemFaces(material, bakeOrFace, nameOrTextures) {
-  if (bakeOrFace && (bakeOrFace.plate || bakeOrFace.bake) && typeof nameOrTextures === 'string') {
-    const name = nameOrTextures.toLowerCase();
-    const bake = bakeOrFace;
-    const face = ITEM_FACES[name];
-    if (!face) return material;
-    const textures = {
-      plate: { value: bake.plate },
-      inside: { value: name === 'tome' ? bake.pages : bake.back }
-    };
-    return _applyItemFaces(material, face, textures);
+export const SWORD_TILTS = { 84: 135, 85: 135, 86: 95, 87: 60, 88: 20, 89: -5, 90: -30, 91: -50 };
+export const SPEAR_TILTS = { 103: 72, 104: 72 };
+export const SPEAR_SLIDES = { 105: 1, 106: 2, 107: 0.5, 108: 2, 109: 0.5, 110: 1.5, 111: 2 };
+export const GUN_READY_TILTS = { 112: -50, 113: -50 };
+export const READ_BOOK_MIDDLE = 0.385;
+export const READ_BOOK_RISE = 1.35;
+export const SHIELD_TILTS = { 130: 24, 131: 0, 132: -12 };
+export const SHIELD_OFFSETS = { 130: [0, -1.2, 0], 131: [0, 0, 0], 132: [0, 0.8, 0] };
+
+export function resolveHoldAnimationName(atlas, animName, weaponType) {
+  if (!animName) return null;
+  const holds = atlas?.data?.holds;
+  if (!holds) return null;
+  if (holds[animName]) return animName;
+  const lower = animName.toLowerCase();
+  const directMatch = Object.keys(holds).find(k => k.toLowerCase() === lower);
+  if (directMatch) return directMatch;
+
+  if (lower.includes('shield')) return 'Shield Block High';
+  if (lower.includes('book') || lower.includes('tome') || lower.includes('cast')) return 'Read Book';
+  if (lower.includes('thrust') || lower.includes('poke') || lower.includes('spear')) return 'Poke High';
+  if (lower.includes('gun') || lower.includes('rifle') || lower.includes('shot')) return 'Gun High';
+  if (lower.includes('swing') || lower.includes('slash') || lower.includes('sword') || lower.includes('attack')) return 'Swing High';
+
+  if (weaponType) {
+    const w = weaponType.toLowerCase();
+    if (w === 'shield') return 'Shield Block High';
+    if (w === 'tome') return 'Read Book';
+    if (w === 'spear') return 'Poke High';
+    if (w === 'rifle') return 'Gun High';
+    if (w === 'sword') return 'Swing High';
+    if (w === 'harp') return 'Play Instrument';
+    if (w === 'katana') return 'Katana Use';
   }
-  return _applyItemFaces(material, bakeOrFace, nameOrTextures);
+  return null;
 }
 
 export const FACING_NAME_TO_INDEX = {
@@ -332,6 +390,37 @@ export const PALETTE_MAPPINGS = {
 
 export class UnitActor {
   static _activeActors = new Set();
+  static sharedItemFinishBake = null;
+  static sharedEnvMap = null;
+
+  /**
+   * Initializes GPU-baked PLATE / BACK / PAGES finishes and prefiltered RoomEnvironment envMap.
+   * Cached statically on UnitActor and shared across all actors and managers.
+   * @param {THREE.WebGLRenderer} renderer
+   * @returns {Object|null}
+   */
+  static initItemFinishBake(renderer) {
+    if (!renderer) return null;
+    try {
+      if (!UnitActor.sharedItemFinishBake) {
+        UnitActor.sharedItemFinishBake = createItemFinishBake(renderer);
+      }
+      UnitActor.sharedItemFinishBake.bake();
+
+      const env = bakeRoomEnvironment(renderer);
+      UnitActor.sharedEnvMap = env ? env.texture : null;
+    } catch (err) {
+      console.warn('[UnitActor] initItemFinishBake warning:', err);
+    }
+
+    for (const actor of UnitActor._activeActors) {
+      if (actor.manager && typeof actor.manager.initItemFinishBake === 'function') {
+        actor.manager.initItemFinishBake(renderer);
+        break;
+      }
+    }
+    return UnitActor.sharedItemFinishBake;
+  }
 
   constructor(options = {}) {
     this.unit = options.unit || {};
@@ -358,6 +447,34 @@ export class UnitActor {
     this.manager = options.manager || null;
 
     UnitActor._activeActors.add(this);
+  }
+
+  get group() {
+    return this.sprite?.group || this.root;
+  }
+
+  animateSpawnDither(fromProgress = 0.0, toProgress = 1.0, durationMs = 420) {
+    return animateSpawnDither(this.group, fromProgress, toProgress, durationMs);
+  }
+
+  resetActorVisuals() {
+    if (this.manager && typeof this.manager.resetActorVisuals === 'function') {
+      return this.manager.resetActorVisuals(this);
+    }
+    updateSpawnProgress(patchGroupSpawnMaterials(this.group), 1.0);
+  }
+
+  playRevive(board = null) {
+    if (this.manager && typeof this.manager.playRevive === 'function') {
+      return this.manager.playRevive(this, board);
+    }
+    this.resetActorVisuals();
+  }
+
+  async animateTeleportPath(targetTile, board = null) {
+    if (this.manager && typeof this.manager.animateTeleportPath === 'function') {
+      return await this.manager.animateTeleportPath(this, targetTile, board);
+    }
   }
 
   setDirection(newDir) {
@@ -915,7 +1032,7 @@ export class StageUnitManager {
 
     this.marbleTexture = null;
     this.marbleMesh = null;
-    this.envMap = null;
+    this.envMap = UnitActor.sharedEnvMap || null;
     this.renderer = null;
 
     // Faction weapon material templates
@@ -924,15 +1041,48 @@ export class StageUnitManager {
     this.mythrilMaterial = null; // backward compatibility alias
 
     // GPU-baked item finish for hammered shield and spellbook pages
-    this.itemFinishBake = null;
+    this.itemFinishBake = UnitActor.sharedItemFinishBake || null;
     this.clothBagResources = null;
     this.lootBags = new Map(); // "${x},${z}" -> { mesh, x, z, data }
+    this.setItemsData = {};
 
     // 3D Volumetric physics hulls & sprite layer debug state
     this.physicsDebugEnabled = false;
     this.bodyResources = null;
 
     this.loaded = false;
+  }
+
+  /**
+   * Initializes GPU-baked PLATE / BACK / PAGES finishes and prefiltered RoomEnvironment envMap.
+   * @param {THREE.WebGLRenderer} renderer
+   * @returns {Object|null}
+   */
+  initItemFinishBake(renderer) {
+    if (!renderer) return null;
+    try {
+      if (!this.itemFinishBake) {
+        this.itemFinishBake = createItemFinishBake(renderer);
+      }
+      this.itemFinishBake.bake();
+      UnitActor.sharedItemFinishBake = this.itemFinishBake;
+
+      const env = bakeRoomEnvironment(renderer);
+      this.envMap = env ? env.texture : null;
+      UnitActor.sharedEnvMap = this.envMap;
+
+      if (this.azureMythrilMaterial) {
+        this.azureMythrilMaterial.envMap = this.envMap;
+        this.azureMythrilMaterial.needsUpdate = true;
+      }
+      if (this.crimsonObsidianMaterial) {
+        this.crimsonObsidianMaterial.envMap = this.envMap;
+        this.crimsonObsidianMaterial.needsUpdate = true;
+      }
+    } catch (err) {
+      console.warn('[StageUnitManager] initItemFinishBake warning:', err);
+    }
+    return this.itemFinishBake;
   }
 
   /**
@@ -958,6 +1108,7 @@ export class StageUnitManager {
     // 4. Load baked Set items GLB
     const glbBuffer = await this._loadArrayBuffer('/set-items.glb');
     const rawItems = readSetItems(glbBuffer);
+    this.setItemsData = rawItems;
 
     // Build BufferGeometry for all 7 Set models:
     // 'rifle', 'sword', 'katana', 'spear', 'shield', 'harp', 'tome'
@@ -974,17 +1125,9 @@ export class StageUnitManager {
       }
     }
 
-    // 5. Create reflective materials using RoomEnvironment PMREM
+    // 5. Initialize GPU-baked item finish & RoomEnvironment PMREM reflections
     if (renderer) {
-      try {
-        const pmrem = new THREE.PMREMGenerator(renderer);
-        const room = new RoomEnvironment();
-        this.envMap = pmrem.fromScene(room, 0.03).texture;
-        room.dispose();
-        pmrem.dispose();
-      } catch (err) {
-        console.warn('[StageUnitManager] PMREMGenerator warning:', err);
-      }
+      this.initItemFinishBake(renderer);
     }
 
     // Azure-Mythril gleaming alloy material
@@ -993,8 +1136,9 @@ export class StageUnitManager {
       metalness: 0.88,
       roughness: 0.20,
       color: 0x93c5fd,
-      envMap: this.envMap
+      envMap: this.envMap || UnitActor.sharedEnvMap
     });
+    applyMythrilVeins(this.azureMythrilMaterial, 0x8fbbe8);
 
     // Crimson-Obsidian sinister dark steel material
     this.crimsonObsidianMaterial = new THREE.MeshStandardMaterial({
@@ -1002,8 +1146,9 @@ export class StageUnitManager {
       metalness: 0.92,
       roughness: 0.16,
       color: 0x991b1b,
-      envMap: this.envMap
+      envMap: this.envMap || UnitActor.sharedEnvMap
     });
+    applyMythrilVeins(this.crimsonObsidianMaterial, 0xef4444);
 
     this.mythrilMaterial = this.azureMythrilMaterial;
 
@@ -1011,19 +1156,6 @@ export class StageUnitManager {
     const marbleGeo = new THREE.SphereGeometry(2.2, 16, 16);
     const marbleMat = createBlackMarbleMaterial(this.marbleTexture);
     this.marbleMesh = new THREE.Mesh(marbleGeo, marbleMat);
-
-    // 7. Initialize GPU-baked item finish (hammered shield rivets & spellbook pages)
-    if (renderer) {
-      try {
-        this.itemFinishBake = createItemFinishBake(renderer);
-        this.itemFinishBake.bake();
-      } catch (err) {
-        console.warn('[StageUnitManager] createItemFinishBake fallback:', err);
-        this.itemFinishBake = null;
-      }
-    } else {
-      this.itemFinishBake = null;
-    }
 
     // 8. Shared resources for XPBD physics cloth bag
     try {
@@ -1222,14 +1354,30 @@ export class StageUnitManager {
     const geo = this.models[lower] || this.models.sword;
     if (!geo) return null;
 
+    const isCrimson = team === 'crimson' || team === 'red';
+    const tintColor = isCrimson ? 0xef4444 : 0x8fbbe8;
     const mat = this._createTierMaterial(team, finishTier, true);
+    if (this.envMap || UnitActor.sharedEnvMap) {
+      mat.envMap = this.envMap || UnitActor.sharedEnvMap;
+      mat.needsUpdate = true;
+    }
 
-    // Apply GPU-baked hammered finish for shield and spellbook pages for tome
-    if (this.itemFinishBake && (lower === 'shield' || lower === 'tome')) {
+    // Apply GPU-baked two-sided finish for shield and tome
+    if (lower === 'shield' || lower === 'tome') {
+      const bake = this.itemFinishBake || UnitActor.sharedItemFinishBake;
+      if (bake) {
+        try {
+          applyItemFaces(mat, lower, { plate: bake.plate, inside: lower === 'tome' ? bake.pages : bake.back }, tintColor);
+        } catch (err) {
+          console.warn('[StageUnitManager] applyItemFaces warning:', err);
+        }
+      }
+    } else {
+      // Blades/spears/rifles/harps/katanas wear 3D procedural mythril veins + RoomEnvironment reflection map
       try {
-        applyItemFaces(mat, this.itemFinishBake, lower);
+        applyMythrilVeins(mat, tintColor);
       } catch (err) {
-        console.warn('[StageUnitManager] applyItemFaces warning:', err);
+        console.warn('[StageUnitManager] applyMythrilVeins warning:', err);
       }
     }
 
@@ -1586,6 +1734,9 @@ export class StageUnitManager {
       if (sprite.group) sprite.group.visible = true;
       this.setActorOpacity(actor, 1.0);
       this.units.set(id, actor);
+
+      // 4x4 Bayer ordered-dither materialization animation on spawn (0.0 -> 1.0, 420ms)
+      animateSpawnDither(actor.group, 0.0, 1.0, 420);
     }
 
     if (this.physicsDebugEnabled) {
@@ -1819,37 +1970,8 @@ export class StageUnitManager {
 
     // Teleportation branch
     if (unit.canTeleport && path.length > 2) {
-      const startTile = path[0];
       const endTile = path[path.length - 1];
-      const startElev = startTile.elevation !== undefined ? startTile.elevation : (board.getTile(startTile.x, startTile.z)?.elevation ?? 0);
-      const endElev = endTile.elevation !== undefined ? endTile.elevation : (board.getTile(endTile.x, endTile.z)?.elevation ?? 0);
-      const startWorld = board.tileToWorld(startTile.x, startTile.z, startElev);
-      const finalWorld = board.tileToWorld(endTile.x, endTile.z, endElev);
-
-      const facing = board.getFacingBetween(startTile.x, startTile.z, endTile.x, endTile.z);
-      actor.sprite.setFacing(facing);
-
-      try {
-        actor.sprite.play('Teleport', getNow());
-      } catch {}
-
-      await this.playTeleport(unit, startWorld, finalWorld);
-
-      unit.x = endTile.x;
-      unit.z = endTile.z;
-      unit.gridX = endTile.x;
-      unit.gridZ = endTile.z;
-      unit.elevation = endElev;
-
-      const nextTile = board.getTile(endTile.x, endTile.z);
-      const isWaterStep = (nextTile?.terrain === 'water' || nextTile?.isWater) && actor.unit.status !== 'floating';
-      actor.inWater = isWaterStep;
-      actor.sprite.player.water = isWaterStep;
-
-      const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
-      const maxHp = actor.unit.maxHp ?? 100;
-      const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
-      actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
+      await this.animateTeleportPath(actor, endTile, board);
       return;
     }
 
@@ -2025,6 +2147,10 @@ export class StageUnitManager {
     });
   }
 
+  async playCombatAnimation(attacker, defender, forecast, outcome, board, nowSecGetter) {
+    return await this.animateCombatAction(attacker, defender, forecast, outcome, board, nowSecGetter);
+  }
+
   /**
    * Animate combat action: attacker strikes/shoots, projectile flight, impact burst,
    * reaction animation, shield block attachment, and defeat cleanup.
@@ -2059,17 +2185,18 @@ export class StageUnitManager {
     const isDragoonJump = forecast?.isDragoonJump || outcome?.isDragoonJump || animName === 'High Jump Start' || animName === 'Dragoon Jump' || animName === 'Jump';
     const isWeaponThrow = forecast?.isWeaponThrow || outcome?.isWeaponThrow || animName === 'Weapon Throw' || animName === 'Item Throw';
 
-    const holdData = this.atlas?.data?.holds?.[animName];
-    const holdItemName = holdData?.item || attackerActor.unit.heldModelName || this._determineUnitWeaponName(attackerActor.unit);
+    const holdItemName = attackerActor.unit.heldModelName || this._determineUnitWeaponName(attackerActor.unit);
+    const holdAnimName = resolveHoldAnimationName(this.atlas, animName, holdItemName);
+    const holdData = (holdAnimName && this.atlas?.data?.holds?.[holdAnimName]) || this.atlas?.data?.holds?.[animName];
     const weaponMesh = this.createWeaponMesh(holdItemName, attackerActor.team);
 
     if (weaponMesh) {
       this.scene.add(weaponMesh);
       attackerActor.carriedMesh = weaponMesh;
 
-      if (holdData) {
+      if (holdAnimName) {
         try {
-          attackerActor.sprite.carry(weaponMesh, animName);
+          attackerActor.sprite.carry(weaponMesh, holdAnimName);
         } catch (e) {
           const facing = toFacingIndex(attackerActor.sprite.player.facing);
           const fX = FACING_X[facing];
@@ -2363,13 +2490,86 @@ export class StageUnitManager {
           return;
         }
 
+        if (animName.startsWith('Gun') || holdItemName === 'rifle') {
+          // Fusilier rifle shot using createMuzzleFlashMesh and createVolumetricStreakMesh
+          const rifleData = this.setItemsData?.rifle || { muzzle: [2.112, 0.655, 0], bore: 0.0528, length: 2.09 };
+          const boreRadius = (rifleData.bore || 0.0528) * HELD_ITEM_SCALE;
+          const boreScale = Math.max(boreRadius * 1.8, 0.55);
+
+          const muzzlePos = new THREE.Vector3();
+          if (weaponMesh) {
+            weaponMesh.updateWorldMatrix(true, false);
+            const rawMuzzle = Array.isArray(rifleData.muzzle) ? rifleData.muzzle : [rifleData.length || 2.09, 0, 0];
+            muzzlePos.fromArray(rawMuzzle).multiplyScalar(0.72 * (attackerActor.actorScale || 1.0));
+            muzzlePos.applyQuaternion(weaponMesh.quaternion).add(weaponMesh.position);
+          } else {
+            muzzlePos.copy(attackerPos);
+          }
+
+          const flashMesh = createMuzzleFlashMesh(this.scene);
+          const streakMesh = createVolumetricStreakMesh(this.scene);
+
+          flashMesh.position.copy(muzzlePos);
+          flashMesh.visible = true;
+
+          const flightDuration = 0.18;
+          const flightStart = getNow();
+          const shotVector = new THREE.Vector3().subVectors(defenderPos, muzzlePos);
+          const totalDist = shotVector.length();
+          const shotDir = shotVector.clone().normalize();
+
+          streakMesh.position.copy(muzzlePos);
+          streakMesh.visible = true;
+
+          const animRifleShot = () => {
+            const elapsed = getNow() - flightStart;
+            const s = Math.min(1.0, elapsed / flightDuration);
+
+            // Muzzle flash decay over initial 80ms
+            if (elapsed < 0.08) {
+              const flashScale = (1.0 - elapsed / 0.08) * (attackerActor.actorScale || 1.0);
+              flashMesh.scale.setScalar(Math.max(0.01, flashScale));
+            } else {
+              flashMesh.visible = false;
+            }
+
+            // Volumetric light streak cone: expands from muzzle to target
+            const streakLen = Math.min(totalDist * 0.45, 18.0);
+            const tipDist = s * totalDist;
+            const tailDist = Math.max(0.0, tipDist - streakLen);
+            const curLength = Math.max(0.01, tipDist - tailDist);
+
+            streakMesh.position.copy(muzzlePos).addScaledVector(shotDir, tailDist);
+            streakMesh.scale.set(curLength, boreScale, boreScale);
+
+            // Orient streak +x along shotDir using basis matrix
+            const aimX = shotDir;
+            const aimUp = new THREE.Vector3(0, 1, 0);
+            const aimZ = new THREE.Vector3().crossVectors(aimX, aimUp);
+            if (aimZ.lengthSq() < 0.0001) aimZ.set(0, 0, 1);
+            else aimZ.normalize();
+            const aimY = new THREE.Vector3().crossVectors(aimZ, aimX).normalize();
+            const basis = new THREE.Matrix4().makeBasis(aimX, aimY, aimZ);
+            streakMesh.quaternion.setFromRotationMatrix(basis);
+
+            if (s < 1.0) {
+              nextFrame(animRifleShot);
+            } else {
+              this.scene.remove(flashMesh);
+              this.scene.remove(streakMesh);
+              flashMesh.geometry.dispose();
+              flashMesh.material.dispose();
+              streakMesh.geometry.dispose();
+              streakMesh.material.dispose();
+              resolve();
+            }
+          };
+          nextFrame(animRifleShot);
+          return;
+        }
+
         let projMesh;
-        if (animName.startsWith('Gun')) {
-          const geo = new THREE.CylinderGeometry(0.3, 0.3, 12, 6);
-          geo.rotateZ(Math.PI / 2);
-          const mat = new THREE.MeshBasicMaterial({ color: 0xfff0c8 });
-          projMesh = new THREE.Mesh(geo, mat);
-        } else if (animName.includes('Casting')) {
+        if (animName.includes('Casting')) {
           const geo = new THREE.SphereGeometry(2.5, 12, 12);
           const mat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
           projMesh = new THREE.Mesh(geo, mat);
@@ -2381,7 +2581,7 @@ export class StageUnitManager {
         projMesh.position.copy(attackerPos);
         this.scene.add(projMesh);
 
-        const flightDuration = animName.startsWith('Gun') ? 0.18 : 0.32;
+        const flightDuration = 0.32;
         const flightStart = getNow();
 
         const animProj = () => {
@@ -2390,11 +2590,7 @@ export class StageUnitManager {
 
           const px = attackerPos.x + (defenderPos.x - attackerPos.x) * s;
           const pz = attackerPos.z + (defenderPos.z - attackerPos.z) * s;
-          let py = attackerPos.y + (defenderPos.y - attackerPos.y) * s;
-
-          if (!animName.startsWith('Gun')) {
-            py += Math.sin(s * Math.PI) * 8;
-          }
+          const py = attackerPos.y + (defenderPos.y - attackerPos.y) * s + Math.sin(s * Math.PI) * 8;
 
           projMesh.position.set(px, py, pz);
           projMesh.lookAt(defenderPos.x, py, defenderPos.z);
@@ -2524,6 +2720,38 @@ export class StageUnitManager {
   }
 
   /**
+   * Resets actor visual opacity, spawnProgress, and visibility.
+   * Immediately restores updateSpawnProgress(refs, 1.0) so revived or reset units are 100% opaque.
+   * @param {string|number|Object} unitOrId
+   */
+  resetActorVisuals(unitOrId) {
+    const actor = this._getActor(unitOrId);
+    if (!actor) return;
+
+    this.setActorOpacity(actor, 1.0);
+    const refs = patchGroupSpawnMaterials(actor.group);
+    updateSpawnProgress(refs, 1.0);
+    actor.spawnProgress = 1.0;
+    actor.spawnRefs = null;
+
+    if (actor.sprite?.group) {
+      actor.sprite.group.visible = true;
+    }
+    if (actor.ring) {
+      actor.ring.visible = true;
+    }
+    if (actor.hitboxMesh) {
+      actor.hitboxMesh.visible = true;
+    }
+    if (actor.idleWeaponMesh && !actor.unit.isDead) {
+      actor.idleWeaponMesh.visible = true;
+    }
+    if (actor.bossCrown && actor.unit.isBoss) {
+      actor.bossCrown.visible = true;
+    }
+  }
+
+  /**
    * Fully restores a defeated or wounded unit to living combatant state.
    * @param {string|number|Object} unitOrId
    * @param {IsometricBoard} [board]
@@ -2536,23 +2764,8 @@ export class StageUnitManager {
     actor.unit.alive = true;
     actor.unit.inPrison = false;
 
-    if (actor.sprite?.group) {
-      actor.sprite.group.visible = true;
-    }
-    this.setActorOpacity(actor, 1.0);
+    this.resetActorVisuals(actor);
 
-    if (actor.ring) {
-      actor.ring.visible = true;
-    }
-    if (actor.hitboxMesh) {
-      actor.hitboxMesh.visible = true;
-    }
-    if (actor.idleWeaponMesh) {
-      actor.idleWeaponMesh.visible = true;
-    }
-    if (actor.bossCrown) {
-      actor.bossCrown.visible = true;
-    }
     if (this.physicsDebugEnabled && actor.physicsHullMesh) {
       actor.physicsHullMesh.visible = true;
     }
@@ -2585,6 +2798,10 @@ export class StageUnitManager {
     const maxHp = actor.unit.maxHp ?? 100;
     const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
     actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
+  }
+
+  playRevive(unitOrId, board = null) {
+    return this.reviveUnit(unitOrId, board);
   }
 
   /**
@@ -2623,7 +2840,11 @@ export class StageUnitManager {
     const getNow = () => performance.now() / 1000;
     actor.sprite.play('Dead', getNow());
 
+    // Run animateSpawnDither(actor.group, 1.0, 0.25, 380) alongside defeat collapse
+    const ditherPromise = animateSpawnDither(actor.group, 1.0, 0.25, 380);
+
     await this._sleep(500);
+    await ditherPromise;
 
     if (actor.ring) {
       actor.ring.visible = false;
@@ -2859,6 +3080,64 @@ export class StageUnitManager {
   }
 
   /**
+   * Smooth PS1 / FFTA Bayer dithered teleport effect along path or directly to targetTile.
+   * Dissolve out with animateSpawnDither(actor.group, 1.0, 0.0, 220) before teleporting
+   * and materialize with animateSpawnDither(actor.group, 0.0, 1.0, 260) at destination!
+   * @param {string|number|Object} unitOrId
+   * @param {Object} targetTile
+   * @param {IsometricBoard} [board]
+   */
+  async animateTeleportPath(unitOrId, targetTile, board = this.board) {
+    const actor = this._getActor(unitOrId);
+    if (!actor || !targetTile) return;
+
+    const b = board || this.board;
+    const targetElev = targetTile.elevation !== undefined ? targetTile.elevation : (b?.getTile(targetTile.x, targetTile.z)?.elevation ?? 0);
+    const targetWorld = b ? b.tileToWorld(targetTile.x, targetTile.z, targetElev) : new THREE.Vector3(targetTile.x, 0, targetTile.z);
+
+    if (b && actor.unit) {
+      const facing = b.getFacingBetween(actor.unit.x ?? 0, actor.unit.z ?? 0, targetTile.x, targetTile.z);
+      actor.sprite.setFacing(facing);
+    }
+
+    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
+    try {
+      actor.sprite.play('Teleport', getNow());
+    } catch {}
+
+    // Dissolve out before teleporting (1.0 -> 0.0, 220ms)
+    await animateSpawnDither(actor.group, 1.0, 0.0, 220);
+
+    // Reposition to destination tile
+    const tx = targetWorld.x;
+    const ty = targetWorld.y;
+    const tz = targetWorld.z;
+    actor.groundY = ty;
+    const isInWater = b ? b.isWaterTile(targetTile.x, targetTile.z) : false;
+    actor.inWater = isInWater;
+    const waterOffset = isInWater && actor.unit?.status !== 'floating' ? -3.5 : 0;
+    actor.sprite.group.position.set(tx, ty + actor.sprite.standHeight + waterOffset, tz);
+    if (actor.ring) actor.ring.position.set(tx, ty + 0.12, tz);
+    if (actor.hitboxMesh) actor.hitboxMesh.position.set(tx, ty + 13, tz);
+
+    if (actor.unit) {
+      actor.unit.x = targetTile.x;
+      actor.unit.z = targetTile.z;
+      actor.unit.gridX = targetTile.x;
+      actor.unit.gridZ = targetTile.z;
+      actor.unit.elevation = targetElev;
+    }
+
+    // Materialize at destination tile (0.0 -> 1.0, 260ms)
+    await animateSpawnDither(actor.group, 0.0, 1.0, 260);
+
+    const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
+    const maxHp = actor.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow(), { loop: true });
+  }
+
+  /**
    * Smooth PS1 / FFTA Bayer dithered teleport effect between two positions.
    * @param {string|number|Object} unitOrId
    * @param {{ x: number, y?: number, z: number }|THREE.Vector3} fromPos
@@ -2868,28 +3147,8 @@ export class StageUnitManager {
     const actor = this._getActor(unitOrId);
     if (!actor) return;
 
-    const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
-    const nextFrame = (cb) => setTimeout(cb, 16);
-
-    const refs = patchGroupSpawnMaterials(actor.sprite.group);
-
-    // 1. Dither fade out at fromPos (progress 1.0 -> 0.0)
-    const fadeOutDuration = 0.25;
-    const startOut = getNow();
-    await new Promise((resolve) => {
-      const tickOut = () => {
-        const elapsed = getNow() - startOut;
-        const p = Math.max(0.0, 1.0 - elapsed / fadeOutDuration);
-        updateSpawnProgress(refs, p);
-        if (elapsed < fadeOutDuration) {
-          nextFrame(tickOut);
-        } else {
-          updateSpawnProgress(refs, 0.0);
-          resolve();
-        }
-      };
-      nextFrame(tickOut);
-    });
+    // 1. Dither fade out at fromPos (progress 1.0 -> 0.0, 220ms)
+    await animateSpawnDither(actor.group, 1.0, 0.0, 220);
 
     // 2. Teleport position to toPos
     const tx = toPos.x ?? toPos.worldX ?? 0;
@@ -2901,23 +3160,8 @@ export class StageUnitManager {
     if (actor.ring) actor.ring.position.set(tx, ty + 0.12, tz);
     if (actor.hitboxMesh) actor.hitboxMesh.position.set(tx, ty + 13, tz);
 
-    // 3. Dither fade in at toPos (progress 0.0 -> 1.0)
-    const fadeInDuration = 0.25;
-    const startIn = getNow();
-    await new Promise((resolve) => {
-      const tickIn = () => {
-        const elapsed = getNow() - startIn;
-        const p = Math.min(1.0, elapsed / fadeInDuration);
-        updateSpawnProgress(refs, p);
-        if (elapsed < fadeInDuration) {
-          nextFrame(tickIn);
-        } else {
-          updateSpawnProgress(refs, 1.0);
-          resolve();
-        }
-      };
-      nextFrame(tickIn);
-    });
+    // 3. Dither fade in at toPos (progress 0.0 -> 1.0, 260ms)
+    await animateSpawnDither(actor.group, 0.0, 1.0, 260);
   }
 
   /**
@@ -3048,12 +3292,12 @@ export class StageUnitManager {
         actor.bossCrown.rotation.z = Math.sin(nowSec * 2.0) * 0.15;
       }
 
-      // Persistent 3D held/holstered weapon with gentle breathing bob
+      // Persistent 3D held/holstered weapon with per-frame SHP articulation & gentle breathing bob
       if (actor.idleWeaponMesh && actor.idleWeaponMesh.visible && actor.sprite?.group) {
         if (actor.unit.isDead) {
           actor.idleWeaponMesh.visible = false;
         } else {
-          const facing = toFacingIndex(actor.sprite.player.facing ?? actor.unit.facing);
+          const facing = toFacingIndex(actor.sprite.player?.facing ?? actor.unit.facing);
           const fX = FACING_X[facing];
           const fZ = FACING_Z[facing];
           const groupPos = actor.sprite.group.position;
@@ -3065,15 +3309,54 @@ export class StageUnitManager {
           const acrossZ = fX;
           const side = 4.8 * aScale;
           const back = -1.2 * aScale;
+          const baseAngle = Math.atan2(fX, fZ);
+          const weaponName = (actor.idleWeaponMesh.name || '').toLowerCase();
 
-          actor.idleWeaponMesh.position.set(
-            groupPos.x + acrossX * side + fX * back,
-            groupPos.y - 4.5 * aScale + bob,
-            groupPos.z + acrossZ * side + fZ * back
-          );
-
-          const angle = Math.atan2(fX, fZ);
-          actor.idleWeaponMesh.rotation.set(0.18, angle + 0.25, -0.15);
+          if (weaponName.includes('spear')) {
+            // SPEAR: Ready pose stands upright beside warrior (SPEAR_TILTS[103] = 72°)
+            const tiltRad = (SPEAR_TILTS[103] || 72) * (Math.PI / 180);
+            actor.idleWeaponMesh.position.set(
+              groupPos.x + acrossX * (side * 0.95) + fX * (back + 0.5),
+              groupPos.y - 2.0 * aScale + bob,
+              groupPos.z + acrossZ * (side * 0.95) + fZ * (back + 0.5)
+            );
+            actor.idleWeaponMesh.rotation.set(0.08, baseAngle + 0.15, tiltRad - Math.PI / 2);
+          } else if (weaponName.includes('rifle')) {
+            // RIFLE: Gun ready dip pose (GUN_READY_TILTS[112] = -50°)
+            const tiltRad = (GUN_READY_TILTS[112] || -50) * (Math.PI / 180);
+            actor.idleWeaponMesh.position.set(
+              groupPos.x + acrossX * (side * 0.8) + fX * 2.5 * aScale,
+              groupPos.y - 3.5 * aScale + bob,
+              groupPos.z + acrossZ * (side * 0.8) + fZ * 2.5 * aScale
+            );
+            actor.idleWeaponMesh.rotation.set(tiltRad * 0.4, baseAngle + 0.3, tiltRad * 0.5);
+          } else if (weaponName.includes('shield')) {
+            // SHIELD: Guard position at side facing outward (SHIELD_TILTS[131] = 0°, offset [0,0,0])
+            actor.idleWeaponMesh.position.set(
+              groupPos.x - acrossX * (side * 0.7) + fX * 1.5 * aScale,
+              groupPos.y - 1.5 * aScale + bob,
+              groupPos.z - acrossZ * (side * 0.7) + fZ * 1.5 * aScale
+            );
+            actor.idleWeaponMesh.rotation.set(0.0, baseAngle + Math.PI / 2, 0.0);
+          } else if (weaponName.includes('tome')) {
+            // TOME: Open book resting upright on palm with READ_BOOK_RISE lift and READ_BOOK_MIDDLE offset
+            const rise = READ_BOOK_RISE * HELD_ITEM_SCALE * 0.22 * aScale;
+            const mid = READ_BOOK_MIDDLE * HELD_ITEM_SCALE * 0.22 * aScale;
+            actor.idleWeaponMesh.position.set(
+              groupPos.x + acrossX * (side * 0.6 + mid) + fX * (2.2 * aScale),
+              groupPos.y - 0.5 * aScale + rise + bob,
+              groupPos.z + acrossZ * (side * 0.6 + mid) + fZ * (2.2 * aScale)
+            );
+            actor.idleWeaponMesh.rotation.set(0.2, baseAngle + Math.PI / 2, (80 * Math.PI) / 180);
+          } else {
+            // SWORD / KATANA / HARP: Slung at hip with dynamic tilt (SWORD_TILTS[88] = 20°)
+            actor.idleWeaponMesh.position.set(
+              groupPos.x + acrossX * side + fX * back,
+              groupPos.y - 4.5 * aScale + bob,
+              groupPos.z + acrossZ * side + fZ * back
+            );
+            actor.idleWeaponMesh.rotation.set(0.18, baseAngle + 0.25, -0.15);
+          }
         }
       }
 

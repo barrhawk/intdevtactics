@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { createWaterSwell, createWaterRipples, sampleWaterField } from '@engine/debug/water-simulation';
 import { createMarbleBake, createMarbleMaterial } from '@engine/debug/marble-material';
 import { WaterSurface, MAX_WATER_POSTS } from './water-surface.js';
+import { UnitActor } from './unit-actor.js';
 
 export const BOARD_SIZE = 10;
 export const TILE_SIZE = 24;
@@ -271,6 +272,16 @@ export class IsometricBoard {
    */
   initMarbleBake(renderer) {
     if (!renderer) return;
+
+    // Automatically trigger GPU PLATE / BACK / PAGES finish & RoomEnvironment bake on startup
+    try {
+      if (typeof UnitActor?.initItemFinishBake === 'function') {
+        UnitActor.initItemFinishBake(renderer);
+      }
+    } catch (err) {
+      console.warn('[IsometricBoard] UnitActor.initItemFinishBake warning:', err);
+    }
+
     if (this.marbleBake) {
       this.marbleBake.dispose();
     }
