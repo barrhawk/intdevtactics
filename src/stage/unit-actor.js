@@ -13,6 +13,12 @@ import { createClothBagResources, createClothBagMesh, syncClothBagMesh } from '@
 import { ITEM_FACES, applyItemFaces as _applyItemFaces, createItemFinishBake } from '@engine/weapons/item-finish';
 import { patchGroupSpawnMaterials, updateSpawnProgress, computeSpawnProgress } from '@engine/meshes/spawn-effect';
 
+// Sprint 3 Engine Upgrades: Marble, Hopping Damage Counter, Physics Hull & Sprite Layer Inspector
+import { prepareBlackMarbleTexture, createBlackMarbleMaterial } from '@engine/debug/marble-material';
+import { counterHop, COUNTER_TICKS, COUNTER_ANCHOR_PX, LAYER_TINTS } from '@engine/debug/sprite-animation-demo-catalog';
+import { readSheetAlpha, BODY_PX_ACROSS, BODY_PX_UP } from '@engine/physics/sprite-body';
+import { createBodyResources } from '@engine/debug/physics-body-mesh';
+
 export { BOW_SPEC, createBow, bendAt, simulateShot, createBowMesh, createArrowGeometries, createArrowMesh, solveArc };
 export { CLOTH_BAG_SPEC, createClothBag, resetClothBag, whipClothBag, stepClothBag, createClothBagMesh };
 export { ITEM_FACES, createItemFinishBake };
@@ -66,34 +72,109 @@ export function toFacingIndex(facing) {
   return 1; // Default SE
 }
 
+// 5x7 Pixel-Art Damage Counter Constants & Shader Definitions
+const COUNTER_PX_X = 28 / 32;
+const COUNTER_PX_Y = 35 / 40;
+const COUNTER_GLYPH_W = 5;
+const COUNTER_GLYPH_H = 7;
+const COUNTER_CELL_W = COUNTER_GLYPH_W + 2;
+const COUNTER_CELL_H = COUNTER_GLYPH_H + 2;
+const COUNTER_ADVANCE = COUNTER_CELL_W - 1;
+
+const COUNTER_GLYPHS = [
+  [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
+  [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+  [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
+  [0x0e, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0e],
+  [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
+  [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
+  [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
+  [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+  [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
+  [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c]
+];
+
+function counterGlyphAt(digit, x, y) {
+  return x >= 0 && x < COUNTER_GLYPH_W && y >= 0 && y < COUNTER_GLYPH_H && ((COUNTER_GLYPHS[digit][y] >> (COUNTER_GLYPH_W - 1 - x)) & 1) === 1;
+}
+
+function createCounterDigitsTexture(isHeal = false) {
+  const data = new Uint8Array(COUNTER_CELL_W * 10 * COUNTER_CELL_H * 4);
+  const fillR = isHeal ? 52 : 255;
+  const fillG = isHeal ? 211 : 255;
+  const fillB = isHeal ? 153 : 255;
+
+  for (let digit = 0; digit < 10; digit++) {
+    for (let y = 0; y < COUNTER_CELL_H; y++) {
+      for (let x = 0; x < COUNTER_CELL_W; x++) {
+        const gx = x - 1;
+        const gy = y - 1;
+        let edge = false;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            edge = edge || counterGlyphAt(digit, gx + dx, gy + dy);
+          }
+        }
+        const target = ((COUNTER_CELL_H - 1 - y) * COUNTER_CELL_W * 10 + digit * COUNTER_CELL_W + x) * 4;
+        const isFill = counterGlyphAt(digit, gx, gy);
+        data[target] = isFill ? fillR : 0;
+        data[target + 1] = isFill ? fillG : 0;
+        data[target + 2] = isFill ? fillB : 0;
+        data[target + 3] = edge ? 255 : 0;
+      }
+    }
+  }
+  const texture = new THREE.DataTexture(data, COUNTER_CELL_W * 10, COUNTER_CELL_H, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  return texture;
+}
+
+const COUNTER_VERTEX_SHADER = /* glsl */ `
+  uniform float hops[10];
+  attribute float order;
+  varying vec2 vUv;
+  uniform float uAnchor;
+  uniform float uPxX;
+  uniform float uPxY;
+
+  void main() {
+    vUv = uv;
+    float hop = hops[int(order)];
+    vec4 view = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    view.xy += vec2(position.x, position.y + uAnchor + hop) * vec2(uPxX, uPxY);
+    gl_Position = hop < 0.0 ? vec4(2.0, 2.0, 2.0, 1.0) : projectionMatrix * view;
+  }
+`;
+
+const COUNTER_FRAGMENT_SHADER = /* glsl */ `
+  uniform sampler2D digits;
+  varying vec2 vUv;
+
+  void main() {
+    vec4 texel = texture2D(digits, vUv);
+    if (texel.a < 0.5) discard;
+    gl_FragColor = vec4(texel.rgb, 1.0);
+  }
+`;
+
 /**
  * 15-color palette remapping tables for distinct unit visual differentiation.
- * Source a1.png is indexed to 15 colors:
- * Outlines: '281626', '252028' (luma < 0.14)
- * Clothes/Tunic (GG): '263d33' (dark), '2c5b46' (mid), '237253' (light)
- * Metal/Armor (SS): '888988' (dark), 'b8b9b8' (mid), 'e0e1e0' (light)
- * Hair/Cape (H): '5c2259' (shadow), '89326d' (dark), 'a34d95' (mid), 'ae4b9b' (light)
- * Skin/Face (F): 'c972ad' (shadow), 'da7bc4' (mid), 'f5adde' (light)
  */
 export const PALETTE_MAPPINGS = {
   // Crimson Order Slot 0 Boss: Obsidian & Blood-Crimson Warlord
   crimson_warlord: {
     '281626': 0x180608,
     '252028': 0x140406,
-    // Clothes / tunic: blazing blood-crimson
     '263d33': 0x450a0a,
     '2c5b46': 0x991b1b,
     '237253': 0xdc2626,
-    // Metal / armor: dark obsidian-iron with molten gold trim highlight
     '888988': 0x1c1917,
     'b8b9b8': 0x332f2c,
     'e0e1e0': 0xf59e0b,
-    // Hair / cape: blood-crimson cape
     '5c2259': 0x2e0606,
     '89326d': 0x7f1d1d,
     'a34d95': 0xb91c1c,
     'ae4b9b': 0xef4444,
-    // Skin: pale ash skin & glowing crimson eyes
     'c972ad': 0x78716c,
     'da7bc4': 0xa8a29e,
     'f5adde': 0xe7e5e4
@@ -103,20 +184,16 @@ export const PALETTE_MAPPINGS = {
   crimson_vanguard: {
     '281626': 0x140808,
     '252028': 0x100606,
-    // Tunic: dark charcoal
     '263d33': 0x18181b,
     '2c5b46': 0x27272a,
     '237253': 0x3f3f46,
-    // Armor: deep rust-crimson & bronze plate
     '888988': 0x451a03,
     'b8b9b8': 0x78350f,
     'e0e1e0': 0xb45309,
-    // Hair / cape: deep rust crimson
     '5c2259': 0x3b0712,
     '89326d': 0x881337,
     'a34d95': 0xbe123c,
     'ae4b9b': 0xe11d48,
-    // Skin: battle-hardened warm skin
     'c972ad': 0x9a3412,
     'da7bc4': 0xc2410c,
     'f5adde': 0xfed7aa
@@ -126,20 +203,16 @@ export const PALETTE_MAPPINGS = {
   crimson_hexer: {
     '281626': 0x120618,
     '252028': 0x0e0414,
-    // Robes: abyssal violet & necrotic magenta
     '263d33': 0x2e1065,
     '2c5b46': 0x581c87,
     '237253': 0x7e22ce,
-    // Trim: necrotic magenta
     '888988': 0x4a044e,
     'b8b9b8': 0x86198f,
     'e0e1e0': 0xc026d3,
-    // Hair: ghostly silver-violet
     '5c2259': 0x475569,
     '89326d': 0x64748b,
     'a34d95': 0xa855f7,
     'ae4b9b': 0xd8b4fe,
-    // Skin: pale dusk skin
     'c972ad': 0x701a75,
     'da7bc4': 0xa21caf,
     'f5adde': 0xf0abfc
@@ -149,20 +222,16 @@ export const PALETTE_MAPPINGS = {
   crimson_deadeye: {
     '281626': 0x0a0c16,
     '252028': 0x080a12,
-    // Stealth garb: midnight indigo
     '263d33': 0x0f172a,
     '2c5b46': 0x1e1b4b,
     '237253': 0x312e81,
-    // Trim/mask: scarlet mask/trim
     '888988': 0x7f1d1d,
     'b8b9b8': 0xb91c1c,
     'e0e1e0': 0xef4444,
-    // Hair: silver hair
     '5c2259': 0x334155,
     '89326d': 0x64748b,
     'a34d95': 0x94a3b8,
     'ae4b9b': 0xe2e8f0,
-    // Skin: fair cool ivory
     'c972ad': 0x64748b,
     'da7bc4': 0x94a3b8,
     'f5adde': 0xf1f5f9
@@ -172,20 +241,16 @@ export const PALETTE_MAPPINGS = {
   azure_knight: {
     '281626': 0x081020,
     '252028': 0x060c18,
-    // Tunic: royal cobalt
     '263d33': 0x1e3a8a,
     '2c5b46': 0x1d4ed8,
     '237253': 0x3b82f6,
-    // Armor: mythril gold
     '888988': 0x92400e,
     'b8b9b8': 0xd97706,
     'e0e1e0': 0xfbbf24,
-    // Hair: golden blonde
     '5c2259': 0x78350f,
     '89326d': 0xb45309,
     'a34d95': 0xd97706,
     'ae4b9b': 0xfde047,
-    // Skin: healthy fair skin
     'c972ad': 0xb45309,
     'da7bc4': 0xf59e0b,
     'f5adde': 0xffedd5
@@ -195,20 +260,16 @@ export const PALETTE_MAPPINGS = {
   azure_mage: {
     '281626': 0x061424,
     '252028': 0x040e1c,
-    // Robes: arcane sapphire
     '263d33': 0x0c4a6e,
     '2c5b46': 0x0284c7,
     '237253': 0x0ea5e9,
-    // Trim: starlight cyan
     '888988': 0x0891b2,
     'b8b9b8': 0x06b6d4,
     'e0e1e0': 0x67e8f9,
-    // Hair: mystical midnight
     '5c2259': 0x0f172a,
     '89326d': 0x1e293b,
     'a34d95': 0x334155,
     'ae4b9b': 0x475569,
-    // Skin: fair starlight skin
     'c972ad': 0x94a3b8,
     'da7bc4': 0xcbd5e1,
     'f5adde': 0xf8fafc
@@ -218,20 +279,16 @@ export const PALETTE_MAPPINGS = {
   azure_ranger: {
     '281626': 0x061810,
     '252028': 0x04120c,
-    // Cloak: emerald forest
     '263d33': 0x064e3b,
     '2c5b46': 0x047857,
     '237253': 0x10b981,
-    // Trim/leather: gold-leaf
     '888988': 0x78350f,
     'b8b9b8': 0xb45309,
     'e0e1e0': 0xf59e0b,
-    // Hair: auburn chestnut
     '5c2259': 0x451a03,
     '89326d': 0x7c2d12,
     'a34d95': 0x9a3412,
     'ae4b9b': 0xea580c,
-    // Skin: warm sun-kissed skin
     'c972ad': 0xc2410c,
     'da7bc4': 0xfb923c,
     'f5adde': 0xfed7aa
@@ -241,20 +298,16 @@ export const PALETTE_MAPPINGS = {
   azure_paladin: {
     '281626': 0x0a101c,
     '252028': 0x060c16,
-    // Tabard: royal azure
     '263d33': 0x1e40af,
     '2c5b46': 0x2563eb,
     '237253': 0x60a5fa,
-    // Armor: celestial white-silver
     '888988': 0x64748b,
     'b8b9b8': 0x94a3b8,
     'e0e1e0': 0xf1f5f9,
-    // Hair: platinum gold
     '5c2259': 0xa16207,
     '89326d': 0xca8a04,
     'a34d95': 0xeab308,
     'ae4b9b': 0xfef08a,
-    // Skin: radiant noble skin
     'c972ad': 0x9a3412,
     'da7bc4': 0xea580c,
     'f5adde': 0xffedd5
@@ -271,6 +324,7 @@ export class StageUnitManager {
     this.models = {}; // 'rifle', 'sword', 'katana', 'spear', 'shield', 'harp', 'tome'
     this.projectiles = [];
     this.hitBursts = [];
+    this.damageCounters = [];
 
     this.atlas = null;
     this.sheet = null;
@@ -280,6 +334,7 @@ export class StageUnitManager {
     this.marbleTexture = null;
     this.marbleMesh = null;
     this.envMap = null;
+    this.renderer = null;
 
     // Faction weapon material templates
     this.azureMythrilMaterial = null;
@@ -291,6 +346,10 @@ export class StageUnitManager {
     this.clothBagResources = null;
     this.lootBags = new Map(); // "${x},${z}" -> { mesh, x, z, data }
 
+    // 3D Volumetric physics hulls & sprite layer debug state
+    this.physicsDebugEnabled = false;
+    this.bodyResources = null;
+
     this.loaded = false;
   }
 
@@ -299,6 +358,8 @@ export class StageUnitManager {
    * @param {THREE.WebGLRenderer|null} renderer
    */
   async loadAssets(renderer = null) {
+    this.renderer = renderer;
+
     // 1. Load sprite data
     const spriteData = await this._loadJson('/tactics-sprite-data.json');
     this.atlas = createAtlas(spriteData);
@@ -308,8 +369,9 @@ export class StageUnitManager {
     this.sheet = prepareSheet(rawSheet);
     this.rawImage = rawSheet.image || null;
 
-    // 3. Load marble texture
+    // 3. Load and prepare black marble texture with triplanar shader material
     this.marbleTexture = await this._loadTexture('/marble-black.gif');
+    prepareBlackMarbleTexture(this.marbleTexture);
 
     // 4. Load baked Set items GLB
     const glbBuffer = await this._loadArrayBuffer('/set-items.glb');
@@ -363,15 +425,9 @@ export class StageUnitManager {
 
     this.mythrilMaterial = this.azureMythrilMaterial;
 
-    // 6. Sphere mesh for thrown stones/marbles
+    // 6. Triplanar black marble sphere mesh for thrown stones/marbles
     const marbleGeo = new THREE.SphereGeometry(2.2, 16, 16);
-    const marbleMat = new THREE.MeshStandardMaterial({
-      map: this.marbleTexture,
-      color: 0x1a1a1a,
-      roughness: 0.22,
-      metalness: 0.75,
-      envMap: this.envMap
-    });
+    const marbleMat = createBlackMarbleMaterial(this.marbleTexture);
     this.marbleMesh = new THREE.Mesh(marbleGeo, marbleMat);
 
     // 7. Initialize GPU-baked item finish (hammered shield rivets & spellbook pages)
@@ -401,7 +457,6 @@ export class StageUnitManager {
 
   /**
    * Generates a cached CanvasTexture with pixel-level palette synthesis.
-   * Preserves dark outlines (luma < 0.14) and remaps colors cleanly.
    * @param {string} paletteId
    * @param {'azure'|'crimson'} [team='azure']
    * @param {number} [index=0]
@@ -472,8 +527,7 @@ export class StageUnitManager {
   }
 
   /**
-   * Helper to generate a 5-tier metallic standard material:
-   * 'bronze', 'iron', 'mythril', 'gold', 'adamantite'.
+   * Helper to generate a 5-tier metallic standard material.
    * @param {'azure'|'crimson'|'blue'|'red'} [team='azure']
    * @param {'bronze'|'iron'|'mythril'|'gold'|'adamantite'} [finishTier='mythril']
    * @param {boolean} [isWeapon=false]
@@ -538,14 +592,7 @@ export class StageUnitManager {
   }
 
   /**
-   * Instantiate a 3D weapon mesh from cached models with 5 finish tiers:
-   * 'bronze', 'iron', 'mythril', 'gold', 'adamantite'.
-   * Supports:
-   * - 2400Hz flexible Bow ('bow')
-   * - XPBD physics cloth bag flail ('cloth_bag')
-   * - GPU-baked hammered shield and spellbook pages ('shield', 'tome')
-   * - Thrown marble ('marble', 'stone')
-   * - Set items ('sword', 'katana', 'spear', 'rifle', 'harp')
+   * Instantiate a 3D weapon mesh from cached models with 5 finish tiers.
    * @param {string} name
    * @param {'azure'|'crimson'|'blue'|'red'} [team='azure']
    * @param {'bronze'|'iron'|'mythril'|'gold'|'adamantite'} [finishTier='mythril']
@@ -555,10 +602,11 @@ export class StageUnitManager {
     if (!name) return null;
     const lower = name.toLowerCase();
 
-    // 1. Thrown Stone / Marble
+    // 1. Triplanar Thrown Stone / Black Marble
     if (lower === 'marble' || lower === 'stone') {
       if (!this.marbleMesh) return null;
-      const mesh = new THREE.Mesh(this.marbleMesh.geometry.clone(), this.marbleMesh.material.clone());
+      const mat = createBlackMarbleMaterial(this.marbleTexture);
+      const mesh = new THREE.Mesh(this.marbleMesh.geometry.clone(), mat);
       mesh.name = `WeaponMesh_marble_${team}`;
       return mesh;
     }
@@ -640,8 +688,6 @@ export class StageUnitManager {
 
   /**
    * Create ground indicator ring / plinth.
-   * For Crimson Order: includes a 3D raised octagonal spiked beacon rim.
-   * For Enemy Boss: includes a dual golden-crimson aura.
    * @param {number} color
    * @param {boolean} [isCrimson=false]
    * @param {boolean} [isBoss=false]
@@ -651,11 +697,9 @@ export class StageUnitManager {
     const group = new THREE.Group();
     group.name = 'TeamRing';
 
-    // 1. Flat ground plinth group lying in X-Z plane
     const flatGroup = new THREE.Group();
     flatGroup.rotation.x = -Math.PI / 2;
 
-    // Outer smooth ring
     const outerGeo = new THREE.RingGeometry(7.5, 9.4, 32);
     const outerMat = new THREE.MeshBasicMaterial({
       color,
@@ -666,7 +710,6 @@ export class StageUnitManager {
     });
     const outerRing = new THREE.Mesh(outerGeo, outerMat);
 
-    // Inner octagon plinth
     const innerGeo = new THREE.RingGeometry(1.2, 6.8, 8);
     const innerMat = new THREE.MeshBasicMaterial({
       color,
@@ -677,7 +720,6 @@ export class StageUnitManager {
     });
     const innerOct = new THREE.Mesh(innerGeo, innerMat);
 
-    // Octagram star boundary lines
     const starGeo = new THREE.EdgesGeometry(new THREE.CircleGeometry(8.5, 8));
     const starMat = new THREE.LineBasicMaterial({
       color,
@@ -687,7 +729,6 @@ export class StageUnitManager {
     const starLines = new THREE.LineSegments(starGeo, starMat);
     flatGroup.add(outerRing, innerOct, starLines);
 
-    // Golden inner aura for the boss
     if (isBoss) {
       const bossAuraGeo = new THREE.RingGeometry(3.5, 7.2, 8);
       const bossAuraMat = new THREE.MeshBasicMaterial({
@@ -705,7 +746,6 @@ export class StageUnitManager {
 
     group.add(flatGroup);
 
-    // 2. 3D Raised octagonal spiked beacon rim for Crimson Order (unmistakable at 23° angle)
     if (isCrimson) {
       const rimGeo = new THREE.CylinderGeometry(7.8, 8.4, 1.4, 8, 1, true);
       const rimMat = new THREE.MeshBasicMaterial({
@@ -742,7 +782,6 @@ export class StageUnitManager {
     const crownGroup = new THREE.Group();
     crownGroup.name = 'BossCrown';
 
-    // Central Octahedron diamond
     const diamondGeo = new THREE.OctahedronGeometry(2.4, 0);
     diamondGeo.scale(1.0, 1.4, 1.0);
     const diamondMat = new THREE.MeshStandardMaterial({
@@ -756,7 +795,6 @@ export class StageUnitManager {
     const diamondMesh = new THREE.Mesh(diamondGeo, diamondMat);
     crownGroup.add(diamondMesh);
 
-    // Glowing halo ring around crown
     const haloGeo = new THREE.TorusGeometry(3.6, 0.22, 8, 16);
     haloGeo.rotateX(Math.PI / 2);
     const haloMat = new THREE.MeshBasicMaterial({
@@ -777,13 +815,21 @@ export class StageUnitManager {
    * @param {IsometricBoard} board
    */
   spawnUnits(units, board) {
-    // Clear existing units
     this.dispose();
 
     if (!units || !units.length) return;
 
     if (board && typeof board.setUnitActorManager === 'function') {
       board.setUnitActorManager(this);
+    }
+
+    // Seamlessly trigger Jimmy Lee's veined marble bake if board and renderer are available
+    if (this.renderer && board && typeof board.initMarbleBake === 'function' && !board.marbleBake) {
+      try {
+        board.initMarbleBake(this.renderer);
+      } catch (err) {
+        console.warn('[StageUnitManager] board.initMarbleBake warning:', err);
+      }
     }
 
     for (let i = 0; i < units.length; i++) {
@@ -798,7 +844,6 @@ export class StageUnitManager {
       const slotIndex = (unit.unitIndex !== undefined ? unit.unitIndex : i) % 4;
       const isBoss = !isBlue && (unit.isBoss || slotIndex === 0);
 
-      // Determine palette ID
       let paletteId = unit.paletteId;
       if (!paletteId) {
         if (isBlue) {
@@ -814,8 +859,6 @@ export class StageUnitManager {
         }
       }
 
-      // Determine stature scale:
-      // Boss: 1.18, Heavy: 1.08, Deadeye: 0.94, Paladin: 1.08
       let actorScale = unit.scale;
       if (actorScale === undefined) {
         if (!isBlue) {
@@ -825,10 +868,7 @@ export class StageUnitManager {
         }
       }
 
-      // Get unique paletted sheet texture
       const sheetTexture = this.getPalettedSheetTexture(paletteId, team, slotIndex);
-
-      // CRITICAL FIX 1: ALWAYS convert facing to valid integer (0..7) BEFORE createTacticsSprite
       const facingIdx = toFacingIndex(unit.facing);
       const animation = unit.animation || 'Idle';
 
@@ -840,12 +880,10 @@ export class StageUnitManager {
       });
       sprite.player.facing = facingIdx;
 
-      // Check if unit is spawning in water (wadeable shallow stream)
       const tile = board?.getTile?.(unit.x, unit.z);
       const isInWater = (tile?.terrain === 'water' || tile?.isWater) && unit.status !== 'floating';
       const waterOffset = isInWater ? -3.5 : 0;
 
-      // Stance position at worldPos.x, worldPos.y + sprite.standHeight + waterOffset, worldPos.z
       const worldPos = board.tileToWorld(unit.x, unit.z, unit.elevation);
       sprite.group.position.set(worldPos.x, worldPos.y + sprite.standHeight + waterOffset, worldPos.z);
       if (isInWater) {
@@ -856,17 +894,14 @@ export class StageUnitManager {
       }
       this.scene.add(sprite.group);
 
-      // PS1 / FFTA 4x4 Bayer Dithered Spawn Materialization
       const spawnRefs = patchGroupSpawnMaterials(sprite.group);
       updateSpawnProgress(spawnRefs, 0.0);
 
-      // Under-foot grounded team indicator ring
       const ringColor = isBlue ? 0x38bdf8 : 0xf43f5e;
       const ring = this.createTeamRing(ringColor, !isBlue, isBoss);
       ring.position.set(worldPos.x, worldPos.y + 0.12, worldPos.z);
       this.scene.add(ring);
 
-      // Boss Crown floating above Warlord's head
       let bossCrown = null;
       if (isBoss) {
         bossCrown = this.createBossCrown();
@@ -874,7 +909,6 @@ export class StageUnitManager {
         this.scene.add(bossCrown);
       }
 
-      // Persistent 3D weapon held/holstered during Idle and Walk
       const weaponType = this._determineUnitWeaponName(unit);
       const idleWeaponMesh = this.createWeaponMesh(weaponType, team);
       if (idleWeaponMesh) {
@@ -883,14 +917,12 @@ export class StageUnitManager {
         this.scene.add(idleWeaponMesh);
       }
 
-      // Hitbox cylinder for raycasting top of tile / body selection
       const hitboxGeo = new THREE.CylinderGeometry(7.5, 7.5, 26, 8);
       const hitboxMat = new THREE.MeshBasicMaterial({ visible: false, wireframe: true });
       const hitboxMesh = new THREE.Mesh(hitboxGeo, hitboxMat);
       hitboxMesh.position.set(worldPos.x, worldPos.y + 13, worldPos.z);
       this.scene.add(hitboxMesh);
 
-      // Helper to set facing easily and safely
       sprite.setFacing = (f) => {
         const idx = toFacingIndex(f);
         sprite.player.facing = idx;
@@ -914,10 +946,10 @@ export class StageUnitManager {
         spawnStartTime: typeof performance !== 'undefined' ? performance.now() / 1000 : 0,
         spawnProgress: 0.0,
         statusRingMesh: null,
+        physicsHullMesh: null,
         _materialProxy: null
       };
 
-      // Wrap sprite.play so wading sprites keep player.water = true during animations
       const origPlay = sprite.play.bind(sprite);
       sprite.play = (anim, at, opts = {}) => {
         if (actor.inWater && actor.unit.status !== 'floating') {
@@ -930,7 +962,6 @@ export class StageUnitManager {
         return res;
       };
 
-      // Alias sprite.mesh to sprite.group and support actor.sprite.mesh.material.opacity = 0.28
       sprite.mesh = sprite.group;
       actor._materialProxy = {
         _opacity: 1.0,
@@ -969,8 +1000,216 @@ export class StageUnitManager {
   }
 
   /**
+   * Spawns a 3D WebGL pixel-art hopping damage counter quad above the unit's head.
+   * @param {THREE.Vector3} worldPos
+   * @param {number} amount
+   * @param {boolean} [isHeal=false]
+   * @returns {Object|null}
+   */
+  spawn3DDamageCounter(worldPos, amount, isHeal = false) {
+    const rounded = Math.max(0, Math.round(amount || 0));
+    const text = String(rounded);
+    const digits = [...text].map(Number);
+    const count = digits.length;
+    if (count === 0) return null;
+
+    const left = -(count * COUNTER_ADVANCE + 1) / 2;
+    const positions = [];
+    const uvs = [];
+    const orders = [];
+    const indices = [];
+
+    digits.forEach((digit, order) => {
+      const x0 = left + order * COUNTER_ADVANCE;
+      const y0 = -COUNTER_CELL_H / 2;
+      const base = order * 4;
+      positions.push(
+        x0, y0, 0,
+        x0 + COUNTER_CELL_W, y0, 0,
+        x0, y0 + COUNTER_CELL_H, 0,
+        x0 + COUNTER_CELL_W, y0 + COUNTER_CELL_H, 0
+      );
+      uvs.push(
+        digit / 10, 0,
+        (digit + 1) / 10, 0,
+        digit / 10, 1,
+        (digit + 1) / 10, 1
+      );
+      orders.push(order, order, order, order);
+      indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+    });
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute('order', new THREE.Float32BufferAttribute(orders, 1));
+    geometry.setIndex(indices);
+
+    const texture = isHeal
+      ? (this._healDigitsTex || (this._healDigitsTex = createCounterDigitsTexture(true)))
+      : (this._dmgDigitsTex || (this._dmgDigitsTex = createCounterDigitsTexture(false)));
+
+    const hops = new Float32Array(10);
+    hops.fill(-1);
+
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      uniforms: {
+        digits: { value: texture },
+        hops: { value: hops },
+        uAnchor: { value: COUNTER_ANCHOR_PX },
+        uPxX: { value: COUNTER_PX_X },
+        uPxY: { value: COUNTER_PX_Y }
+      },
+      vertexShader: COUNTER_VERTEX_SHADER,
+      fragmentShader: COUNTER_FRAGMENT_SHADER
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 10;
+    mesh.position.copy(worldPos);
+    this.scene.add(mesh);
+
+    const now = typeof performance !== 'undefined' ? performance.now() / 1000 : 0;
+    const entry = {
+      mesh,
+      geometry,
+      material,
+      hops,
+      digitsCount: count,
+      startTime: now
+    };
+    this.damageCounters.push(entry);
+    return entry;
+  }
+
+  /**
+   * Toggles 3D Volumetric Silhouette Physics Hulls & 6-Layer Sprite Inspector.
+   * @param {boolean} [forceState]
+   * @returns {boolean}
+   */
+  togglePhysicsDebug(forceState) {
+    this.physicsDebugEnabled = forceState !== undefined ? Boolean(forceState) : !this.physicsDebugEnabled;
+
+    if (this.physicsDebugEnabled) {
+      if (!this.bodyResources) {
+        try {
+          let alpha = null;
+          if (this.rawImage || this.sheet?.image) {
+            alpha = readSheetAlpha(this.rawImage || this.sheet.image);
+          } else if (this.sheet) {
+            alpha = readSheetAlpha(this.sheet);
+          }
+          if (!alpha || !alpha.opaque) {
+            alpha = { width: 256, height: 488, opaque: new Uint8Array(256 * 488).fill(1) };
+          }
+          this.bodyResources = createBodyResources(alpha);
+        } catch (err) {
+          console.warn('[StageUnitManager] createBodyResources fallback:', err);
+          const fallbackAlpha = { width: 256, height: 488, opaque: new Uint8Array(256 * 488).fill(1) };
+          this.bodyResources = createBodyResources(fallbackAlpha);
+        }
+      }
+
+      for (const actor of this.units.values()) {
+        if (!actor || actor.unit.isDead) continue;
+
+        if (!actor.physicsHullMesh && this.bodyResources) {
+          const hullMat = this.bodyResources.createMaterial();
+          const hullGeo = this.bodyResources.geometry(0) || this.bodyResources.sphere(5);
+          const hullMesh = new THREE.Mesh(hullGeo, hullMat);
+          hullMesh.name = `PhysicsHull_${actor.unit.id}`;
+          hullMesh.renderOrder = 2;
+          hullMesh.frustumCulled = false;
+          this.scene.add(hullMesh);
+          actor.physicsHullMesh = hullMesh;
+        }
+
+        if (actor.physicsHullMesh) {
+          actor.physicsHullMesh.visible = true;
+        }
+
+        if (actor.sprite?.group) {
+          let planeIndex = 0;
+          actor.sprite.group.traverse((child) => {
+            if (child.isMesh && child !== actor.physicsHullMesh) {
+              const tint = LAYER_TINTS[planeIndex % LAYER_TINTS.length].color;
+              if (child.material && child.material.color) {
+                child.material.color.setHex(tint);
+              }
+              planeIndex++;
+            }
+          });
+        }
+      }
+    } else {
+      for (const actor of this.units.values()) {
+        if (actor.physicsHullMesh) {
+          actor.physicsHullMesh.visible = false;
+        }
+        if (actor.sprite?.group) {
+          actor.sprite.group.traverse((child) => {
+            if (child.isMesh && child !== actor.physicsHullMesh) {
+              if (child.material && child.material.color) {
+                child.material.color.setHex(0xffffff);
+              }
+            }
+          });
+        }
+      }
+    }
+
+    return this.physicsDebugEnabled;
+  }
+
+  /**
+   * Unit interacts with battlefield rune switch obelisk:
+   * faces the switch, plays 'Flip Ground Switch' for 450ms, toggles the switch on the board,
+   * and returns to 'Idle'.
+   * @param {Object} unit
+   * @param {{ x: number, z: number }} switchCoords
+   * @param {IsometricBoard} board
+   * @param {Function} [nowSecGetter]
+   * @returns {Promise<boolean>}
+   */
+  async animateFlipSwitch(unit, switchCoords, board, nowSecGetter) {
+    const actor = this._getActor(unit);
+    if (!actor || !board) return false;
+
+    const getNow = typeof nowSecGetter === 'function' ? nowSecGetter : () => performance.now() / 1000;
+
+    // 1. Turn unit toward switch obelisk
+    const facing = board.getFacingBetween(actor.unit.x, actor.unit.z, switchCoords.x, switchCoords.z);
+    actor.sprite.setFacing(facing);
+
+    // 2. Play 'Flip Ground Switch' animation
+    try {
+      actor.sprite.play('Flip Ground Switch', getNow());
+    } catch {
+      actor.sprite.play('Found Item', getNow());
+    }
+
+    // 3. Wait 450ms
+    await this._sleep(450);
+
+    // 4. Toggle rune switch on board
+    const newState = board.toggleRuneSwitch?.(switchCoords.x, switchCoords.z);
+
+    // 5. Restore Idle
+    const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
+    const maxHp = actor.unit.maxHp ?? 100;
+    const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+    actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
+
+    return Boolean(newState);
+  }
+
+  /**
    * Smoothly moves unit step-by-step along path.
-   * Keeps team ring grounded on floor surface (lerping baseY + 0.12).
+   * If unit.canTeleport && path.length > 2, blinks directly to destination with Bayer dither.
    * @param {Object} unit
    * @param {Array<{ x: number, z: number, elevation?: number }>} path
    * @param {IsometricBoard} board
@@ -984,11 +1223,46 @@ export class StageUnitManager {
     const getNow = typeof nowSecGetter === 'function' ? nowSecGetter : () => performance.now() / 1000;
     const nextFrame = (cb) => setTimeout(cb, 16);
 
+    // Teleportation branch
+    if (unit.canTeleport && path.length > 2) {
+      const startTile = path[0];
+      const endTile = path[path.length - 1];
+      const startElev = startTile.elevation !== undefined ? startTile.elevation : (board.getTile(startTile.x, startTile.z)?.elevation ?? 0);
+      const endElev = endTile.elevation !== undefined ? endTile.elevation : (board.getTile(endTile.x, endTile.z)?.elevation ?? 0);
+      const startWorld = board.tileToWorld(startTile.x, startTile.z, startElev);
+      const finalWorld = board.tileToWorld(endTile.x, endTile.z, endElev);
+
+      const facing = board.getFacingBetween(startTile.x, startTile.z, endTile.x, endTile.z);
+      actor.sprite.setFacing(facing);
+
+      try {
+        actor.sprite.play('Teleport', getNow());
+      } catch {}
+
+      await this.playTeleport(unit, startWorld, finalWorld);
+
+      unit.x = endTile.x;
+      unit.z = endTile.z;
+      unit.gridX = endTile.x;
+      unit.gridZ = endTile.z;
+      unit.elevation = endElev;
+
+      const nextTile = board.getTile(endTile.x, endTile.z);
+      const isWaterStep = (nextTile?.terrain === 'water' || nextTile?.isWater) && actor.unit.status !== 'floating';
+      actor.inWater = isWaterStep;
+      actor.sprite.player.water = isWaterStep;
+
+      const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
+      const maxHp = actor.unit.maxHp ?? 100;
+      const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
+      actor.sprite.play(isLowHp ? 'Critical' : 'Idle', getNow());
+      return;
+    }
+
     for (let i = 0; i < path.length - 1; i++) {
       const prev = path[i];
       const next = path[i + 1];
 
-      // CRITICAL FIX 1 & 2: facing calculation and safe conversion
       const facing = board.getFacingBetween(prev.x, prev.z, next.x, next.z);
       actor.sprite.setFacing(facing);
 
@@ -1020,7 +1294,6 @@ export class StageUnitManager {
 
       const stepDuration = dElev !== 0 ? 0.38 : 0.28;
 
-      // Defect D-18 fix: if walking onto a dead unit's tile, hide the corpse
       for (const otherActor of this.units.values()) {
         if (otherActor !== actor && otherActor.unit?.isDead) {
           const ox = otherActor.unit.gridX !== undefined ? otherActor.unit.gridX : otherActor.unit.x;
@@ -1049,13 +1322,11 @@ export class StageUnitManager {
             curY += Math.sin(s * Math.PI) * 6;
           }
 
-          // Sprite follows movement with water wade vertical offset (-3.5 when wading)
           const startWaterOffset = prevInWater ? -3.5 : 0;
           const targetWaterOffset = isWaterStep ? -3.5 : 0;
           const currentWaterOffset = startWaterOffset + (targetWaterOffset - startWaterOffset) * s;
           actor.sprite.group.position.set(curX, curY + actor.sprite.standHeight + currentWaterOffset, curZ);
 
-          // CRITICAL FIX 5 (D-14): Keep ring grounded on floor surface!
           const groundY = startWorld.y + (targetWorld.y - startWorld.y) * s;
           actor.groundY = groundY;
           actor.ring.position.set(curX, groundY + 0.12, curZ);
@@ -1089,12 +1360,70 @@ export class StageUnitManager {
       });
     }
 
-    // Finished movement: return to 'Idle' (or 'Critical' if HP < 25%)
     const hp = actor.unit.hp ?? actor.unit.currentHp ?? 100;
     const maxHp = actor.unit.maxHp ?? 100;
     const isLowHp = maxHp > 0 && hp / maxHp < 0.25;
     const finalAnim = isLowHp ? 'Critical' : 'Idle';
     actor.sprite.play(finalAnim, getNow());
+  }
+
+  /**
+   * Smoothly slides defender across diorama tiles during ballistic knockback over 220ms.
+   * @private
+   */
+  async _animateKnockbackSlide(actor, knockbackTile, board, getNow) {
+    const startPos = actor.sprite.group.position.clone();
+    const startRingPos = actor.ring ? actor.ring.position.clone() : null;
+    const startHitboxPos = actor.hitboxMesh ? actor.hitboxMesh.position.clone() : null;
+
+    const targetElev = knockbackTile.elevation ?? board.getTile(knockbackTile.x, knockbackTile.z)?.elevation ?? 0;
+    const targetWorld = board.tileToWorld(knockbackTile.x, knockbackTile.z, targetElev);
+    const targetTile = board.getTile(knockbackTile.x, knockbackTile.z);
+    const isWater = (targetTile?.terrain === 'water' || targetTile?.isWater) && actor.unit.status !== 'floating';
+    const waterOffset = isWater ? -3.5 : 0;
+    const targetSpritePos = new THREE.Vector3(targetWorld.x, targetWorld.y + actor.sprite.standHeight + waterOffset, targetWorld.z);
+
+    const duration = 0.22; // 220ms
+    const startTime = getNow();
+    const nextFrame = (cb) => setTimeout(cb, 16);
+
+    await new Promise((resolve) => {
+      const tick = () => {
+        const elapsed = getNow() - startTime;
+        const s = Math.min(1.0, elapsed / duration);
+
+        actor.sprite.group.position.lerpVectors(startPos, targetSpritePos, s);
+        if (actor.ring && startRingPos) {
+          actor.ring.position.set(
+            startRingPos.x + (targetWorld.x - startRingPos.x) * s,
+            startRingPos.y + (targetWorld.y + 0.12 - startRingPos.y) * s,
+            startRingPos.z + (targetWorld.z - startRingPos.z) * s
+          );
+        }
+        if (actor.hitboxMesh && startHitboxPos) {
+          actor.hitboxMesh.position.set(
+            startHitboxPos.x + (targetWorld.x - startHitboxPos.x) * s,
+            startHitboxPos.y + (targetWorld.y + 13 - startHitboxPos.y) * s,
+            startHitboxPos.z + (targetWorld.z - startHitboxPos.z) * s
+          );
+        }
+
+        if (s < 1.0) {
+          nextFrame(tick);
+        } else {
+          actor.unit.x = knockbackTile.x;
+          actor.unit.z = knockbackTile.z;
+          actor.unit.gridX = knockbackTile.x;
+          actor.unit.gridZ = knockbackTile.z;
+          actor.unit.elevation = targetElev;
+          actor.groundY = targetWorld.y;
+          actor.inWater = isWater;
+          actor.sprite.player.water = isWater;
+          resolve();
+        }
+      };
+      nextFrame(tick);
+    });
   }
 
   /**
@@ -1116,21 +1445,21 @@ export class StageUnitManager {
     const getNow = typeof nowSecGetter === 'function' ? nowSecGetter : () => performance.now() / 1000;
     const nextFrame = (cb) => setTimeout(cb, 16);
 
-    // 1. Turn attacker toward defender
+    // 1. Turn attacker toward defender and defender toward attacker
     const attFacing = board.getFacingBetween(attackerActor.unit.x, attackerActor.unit.z, defenderActor.unit.x, defenderActor.unit.z);
     attackerActor.sprite.setFacing(attFacing);
 
-    // Turn defender toward attacker
     const defFacing = board.getFacingBetween(defenderActor.unit.x, defenderActor.unit.z, attackerActor.unit.x, attackerActor.unit.z);
     defenderActor.sprite.setFacing(defFacing);
 
-    // Hide persistent idle weapon while attack weapon runs
     if (attackerActor.idleWeaponMesh) {
       attackerActor.idleWeaponMesh.visible = false;
     }
 
-    // 2. Attach 3D Set weapon mesh corresponding to forecast.animationName
     const animName = forecast?.animationName || 'Swing High';
+    const isDragoonJump = forecast?.isDragoonJump || outcome?.isDragoonJump || animName === 'High Jump Start' || animName === 'Dragoon Jump' || animName === 'Jump';
+    const isWeaponThrow = forecast?.isWeaponThrow || outcome?.isWeaponThrow || animName === 'Weapon Throw' || animName === 'Item Throw';
+
     const holdData = this.atlas?.data?.holds?.[animName];
     const holdItemName = holdData?.item || attackerActor.unit.heldModelName || this._determineUnitWeaponName(attackerActor.unit);
     const weaponMesh = this.createWeaponMesh(holdItemName, attackerActor.team);
@@ -1143,7 +1472,6 @@ export class StageUnitManager {
         try {
           attackerActor.sprite.carry(weaponMesh, animName);
         } catch (e) {
-          console.warn('[StageUnitManager] carry weapon warning:', e);
           const facing = toFacingIndex(attackerActor.sprite.player.facing);
           const fX = FACING_X[facing];
           const fZ = FACING_Z[facing];
@@ -1152,7 +1480,6 @@ export class StageUnitManager {
           weaponMesh.scale.setScalar(0.72 * (attackerActor.actorScale || 1.0));
         }
       } else {
-        // CRITICAL FIX 4 (D-06): NEVER leave weapon at (0,0,0) for Bow/Casting/Throw!
         const facing = toFacingIndex(attackerActor.sprite.player.facing);
         const fX = FACING_X[facing];
         const fZ = FACING_Z[facing];
@@ -1163,25 +1490,212 @@ export class StageUnitManager {
       }
     }
 
-    // 3. Play attacker animation
-    const startTime = getNow();
-    attackerActor.sprite.play(animName, startTime);
-
-    // 4. Combat effects synced to hit moment
-    const isRanged =
-      animName.startsWith('Bow') ||
-      animName.startsWith('Gun') ||
-      animName.includes('Casting') ||
-      animName.startsWith('Item Throw') ||
-      animName.includes('Throw');
-
     const attackerPos = attackerActor.sprite.group.position.clone();
     attackerPos.y += 12; // Release from chest/arm
     const defenderPos = defenderActor.sprite.group.position.clone();
     defenderPos.y += 10; // Chest target
+    const isHeal = Boolean(outcome?.isHeal || (outcome?.heal && outcome.heal > 0));
+
+    // SPECIAL BRANCH 1: Multi-Phase Dragoon Sky Leap
+    if (isDragoonJump) {
+      // Phase 1: High Jump Start (140ms)
+      attackerActor.sprite.play('High Jump Start', getNow());
+      await this._sleep(140);
+
+      // Phase 2: High Jump Hold & ascend +65 world units into sky (200ms)
+      attackerActor.sprite.play('High Jump Hold', getNow());
+      const baseAttY = attackerActor.sprite.group.position.y;
+      await new Promise((resolve) => {
+        const jumpStart = getNow();
+        const tickUp = () => {
+          const elapsed = getNow() - jumpStart;
+          const s = Math.min(1.0, elapsed / 0.20);
+          attackerActor.sprite.group.position.y = baseAttY + 65 * s;
+          if (s < 1.0) nextFrame(tickUp);
+          else resolve();
+        };
+        nextFrame(tickUp);
+      });
+
+      // Phase 3: Dive onto defenderPos playing 'High Jump Land' / 'Dragoon Jump 3' (180ms)
+      try {
+        attackerActor.sprite.play('High Jump Land', getNow());
+      } catch {
+        try { attackerActor.sprite.play('Dragoon Jump 3', getNow()); } catch {}
+      }
+
+      const diveStartPos = attackerActor.sprite.group.position.clone();
+      const diveTargetPos = new THREE.Vector3(defenderPos.x, defenderActor.groundY + attackerActor.sprite.standHeight, defenderPos.z);
+
+      await new Promise((resolve) => {
+        const diveStart = getNow();
+        const tickDive = () => {
+          const elapsed = getNow() - diveStart;
+          const s = Math.min(1.0, elapsed / 0.18);
+          attackerActor.sprite.group.position.lerpVectors(diveStartPos, diveTargetPos, s);
+          if (s < 1.0) nextFrame(tickDive);
+          else resolve();
+        };
+        nextFrame(tickDive);
+      });
+
+      // Phase 4: Impact Burst & 3D WebGL Pixel-Art Damage Counter
+      this._spawnHitBurst(defenderPos, outcome);
+      this.spawn3DDamageCounter(defenderPos, outcome?.heal || outcome?.damage || 10, isHeal);
+
+      // Defender reaction & optional shield block
+      const reactionAnim = outcome?.reactionAnimation || 'Taking Damage';
+      defenderActor.sprite.play(reactionAnim, getNow());
+
+      if (outcome?.blocked) {
+        try {
+          attackerActor.sprite.play('Thrust Recoil High', getNow());
+        } catch {}
+      }
+
+      // Ballistic knockback slide if present
+      if (outcome?.knockbackTile) {
+        await this._animateKnockbackSlide(defenderActor, outcome.knockbackTile, board, getNow);
+      }
+
+      // Phase 5: Leap back to attackerPos
+      await new Promise((resolve) => {
+        const leapBackStart = getNow();
+        const tickBack = () => {
+          const elapsed = getNow() - leapBackStart;
+          const s = Math.min(1.0, elapsed / 0.20);
+          const pX = defenderPos.x + (attackerPos.x - defenderPos.x) * s;
+          const pZ = defenderPos.z + (attackerPos.z - defenderPos.z) * s;
+          const pY = defenderActor.groundY + (attackerActor.groundY - defenderActor.groundY) * s + attackerActor.sprite.standHeight + Math.sin(s * Math.PI) * 20;
+          attackerActor.sprite.group.position.set(pX, pY, pZ);
+          if (s < 1.0) nextFrame(tickBack);
+          else {
+            attackerActor.sprite.group.position.set(attackerPos.x, baseAttY, attackerPos.z);
+            resolve();
+          }
+        };
+        nextFrame(tickBack);
+      });
+
+      // Cleanup carried weapon
+      attackerActor.sprite.release();
+      if (attackerActor.carriedMesh) {
+        this.scene.remove(attackerActor.carriedMesh);
+        attackerActor.carriedMesh = null;
+      }
+      if (attackerActor.idleWeaponMesh && !attackerActor.unit.isDead) {
+        attackerActor.idleWeaponMesh.visible = true;
+      }
+
+      const attHp = attackerActor.unit.hp ?? attackerActor.unit.currentHp ?? 100;
+      const attMax = attackerActor.unit.maxHp ?? 100;
+      const isAttLow = attMax > 0 && attHp / attMax < 0.25;
+      attackerActor.sprite.play(isAttLow ? 'Critical' : 'Idle', getNow());
+
+      const defHp = defenderActor.unit.hp ?? defenderActor.unit.currentHp ?? 100;
+      const isDead = !isHeal && defHp <= 0;
+      if (isDead) {
+        await this.playDefeat(defenderActor.unit.id);
+      } else {
+        const defMax = defenderActor.unit.maxHp ?? 100;
+        const isDefLow = defMax > 0 && defHp / defMax < 0.25;
+        defenderActor.sprite.play(isDefLow ? 'Critical' : 'Idle', getNow());
+      }
+      return;
+    }
+
+    // SPECIAL BRANCH 2: Spinning Weapon Throw
+    if (isWeaponThrow) {
+      attackerActor.sprite.play(animName, getNow());
+      await this._sleep(150);
+
+      const projMesh = this.createWeaponMesh(this._determineUnitWeaponName(attackerActor.unit), attackerActor.team) ||
+        this.createWeaponMesh('sword', attackerActor.team);
+      projMesh.position.copy(attackerPos);
+      this.scene.add(projMesh);
+
+      const dx = Math.hypot(defenderPos.x - attackerPos.x, defenderPos.z - attackerPos.z);
+      const dy = defenderPos.y - attackerPos.y;
+      const throwSpeed = 160;
+      const solved = solveArc(dx, dy, throwSpeed);
+      const flightDuration = solved ? solved.flightS : 0.32;
+      const vh = solved ? solved.vh : (dx / flightDuration);
+      const vv = solved ? solved.vv : ((dy - 0.5 * defaultGravity * flightDuration * flightDuration) / flightDuration);
+
+      const flightStart = getNow();
+      await new Promise((resolve) => {
+        const animSpinThrow = () => {
+          const elapsed = getNow() - flightStart;
+          const t = Math.min(elapsed, flightDuration);
+          const s = flightDuration > 0 ? t / flightDuration : 1.0;
+          const px = attackerPos.x + (defenderPos.x - attackerPos.x) * s;
+          const pz = attackerPos.z + (defenderPos.z - attackerPos.z) * s;
+          const py = attackerPos.y + vv * t + 0.5 * defaultGravity * t * t;
+
+          projMesh.position.set(px, py, pz);
+          projMesh.rotation.z += 0.45;
+          projMesh.rotation.x += 0.25;
+
+          if (elapsed < flightDuration) {
+            nextFrame(animSpinThrow);
+          } else {
+            this.scene.remove(projMesh);
+            if (projMesh.geometry) projMesh.geometry.dispose();
+            if (projMesh.material) projMesh.material.dispose();
+            resolve();
+          }
+        };
+        nextFrame(animSpinThrow);
+      });
+
+      // Impact burst and damage counter
+      this._spawnHitBurst(defenderPos, outcome);
+      this.spawn3DDamageCounter(defenderPos, outcome?.heal || outcome?.damage || 10, isHeal);
+
+      const reactionAnim = outcome?.reactionAnimation || 'Taking Damage';
+      defenderActor.sprite.play(reactionAnim, getNow());
+
+      if (outcome?.knockbackTile) {
+        await this._animateKnockbackSlide(defenderActor, outcome.knockbackTile, board, getNow);
+      }
+
+      await this._sleep(350);
+
+      attackerActor.sprite.release();
+      if (attackerActor.carriedMesh) {
+        this.scene.remove(attackerActor.carriedMesh);
+        attackerActor.carriedMesh = null;
+      }
+      if (attackerActor.idleWeaponMesh && !attackerActor.unit.isDead) {
+        attackerActor.idleWeaponMesh.visible = true;
+      }
+
+      const attHp = attackerActor.unit.hp ?? attackerActor.unit.currentHp ?? 100;
+      const attMax = attackerActor.unit.maxHp ?? 100;
+      const isAttLow = attMax > 0 && attHp / attMax < 0.25;
+      attackerActor.sprite.play(isAttLow ? 'Critical' : 'Idle', getNow());
+
+      const defHp = defenderActor.unit.hp ?? defenderActor.unit.currentHp ?? 100;
+      const isDead = !isHeal && defHp <= 0;
+      if (isDead) {
+        await this.playDefeat(defenderActor.unit.id);
+      } else {
+        const defMax = defenderActor.unit.maxHp ?? 100;
+        const isDefLow = defMax > 0 && defHp / defMax < 0.25;
+        defenderActor.sprite.play(isDefLow ? 'Critical' : 'Idle', getNow());
+      }
+      return;
+    }
+
+    // Standard Melee / Bow / Gun / Magic Casting Action
+    attackerActor.sprite.play(animName, getNow());
+
+    const isRanged =
+      animName.startsWith('Bow') ||
+      animName.startsWith('Gun') ||
+      animName.includes('Casting');
 
     if (isRanged) {
-      // 2400Hz Flexible Bow limb bending during draw phase
       if (weaponMesh && weaponMesh.userData?.bow) {
         const bow = weaponMesh.userData.bow;
         const { phi } = bendAt(bow, BOW_SPEC.drawLength);
@@ -1191,7 +1705,6 @@ export class StageUnitManager {
 
       await this._sleep(150);
 
-      // Spawn flying projectile (3D flexible bow arrow, gun bullet, spell sphere, or stone)
       await new Promise((resolve) => {
         if (animName.startsWith('Bow') || holdItemName === 'bow') {
           const dx = Math.hypot(defenderPos.x - attackerPos.x, defenderPos.z - attackerPos.z);
@@ -1299,7 +1812,6 @@ export class StageUnitManager {
         nextFrame(animProj);
       });
     } else {
-      // Step XPBD physics for cloth bag swing if swinging flail
       if (weaponMesh && weaponMesh.userData?.clothBag) {
         const { bag } = weaponMesh.userData.clothBag;
         whipClothBag(bag, defenderPos.x, defenderPos.y, 0.3);
@@ -1315,14 +1827,25 @@ export class StageUnitManager {
       await this._sleep(300);
     }
 
-    // 5. Impact Moment: Spawn expanding 3D hit burst
+    // Impact Moment: Spawn expanding 3D hit burst & 3D damage counter
     this._spawnHitBurst(defenderPos, outcome);
+    this.spawn3DDamageCounter(defenderPos, outcome?.heal || outcome?.damage || 10, isHeal);
+
+    // Shield Block Thrust Recoil
+    if (outcome?.blocked) {
+      try {
+        attackerActor.sprite.play('Thrust Recoil High', getNow());
+      } catch {
+        try {
+          attackerActor.sprite.play('Swing RecoilHigh', getNow());
+        } catch {}
+      }
+    }
 
     // Reaction animation
     const reactionAnim = outcome?.reactionAnimation || 'Taking Damage';
     defenderActor.sprite.play(reactionAnim, getNow());
 
-    // If blocked with a shield, attach 3D shield mesh to defender
     if (reactionAnim.includes('Shield Block')) {
       const shieldMesh = this.createWeaponMesh('shield', defenderActor.team);
       if (shieldMesh) {
@@ -1339,10 +1862,13 @@ export class StageUnitManager {
       }
     }
 
-    // 6. Wait for animation sequence to complete
+    // Ballistic Knockback Slide
+    if (outcome?.knockbackTile) {
+      await this._animateKnockbackSlide(defenderActor, outcome.knockbackTile, board, getNow);
+    }
+
     await this._sleep(500);
 
-    // Release and cleanup carried weapon from attacker
     attackerActor.sprite.release();
     if (attackerActor.carriedMesh) {
       if (attackerActor.carriedMesh.material) {
@@ -1353,18 +1879,15 @@ export class StageUnitManager {
       attackerActor.carriedMesh = null;
     }
 
-    // Restore persistent idle weapon for attacker
     if (attackerActor.idleWeaponMesh && !attackerActor.unit.isDead) {
       attackerActor.idleWeaponMesh.visible = true;
     }
 
-    // Reset living attacker to Idle or Critical
     const attHp = attackerActor.unit.hp ?? attackerActor.unit.currentHp ?? 100;
     const attMax = attackerActor.unit.maxHp ?? 100;
     const isAttLow = attMax > 0 && attHp / attMax < 0.25;
     attackerActor.sprite.play(isAttLow ? 'Critical' : 'Idle', getNow());
 
-    // Clean up defender shield if attached
     if (defenderActor.carriedMesh) {
       defenderActor.sprite.release();
       if (defenderActor.carriedMesh.material) {
@@ -1375,8 +1898,6 @@ export class StageUnitManager {
       defenderActor.carriedMesh = null;
     }
 
-    // Check if defender died or was healed/revived
-    const isHeal = Boolean(outcome?.isHeal || reactionAnim === 'Revived' || (outcome?.heal && outcome.heal > 0));
     const defHp = defenderActor.unit.hp ?? defenderActor.unit.currentHp ?? 100;
 
     if (isHeal || defHp > 0) {
@@ -1404,8 +1925,7 @@ export class StageUnitManager {
   }
 
   /**
-   * Fully restores a defeated or wounded unit to living combatant state:
-   * resets isDead/alive, restores sprite opacity to 1.0, and unhides ring, hitbox, and weapon.
+   * Fully restores a defeated or wounded unit to living combatant state.
    * @param {string|number|Object} unitOrId
    */
   reviveUnit(unitOrId) {
@@ -1441,8 +1961,7 @@ export class StageUnitManager {
   }
 
   /**
-   * Defeat sequence (Fix D-18):
-   * Plays 'Dead' sequence, hides team ring & idle weapon, fades corpse opacity to 0.28.
+   * Defeat sequence: plays 'Dead' sequence, hides team ring & weapon, fades corpse opacity.
    * @param {string|number|Object} unitOrId
    */
   async playDefeat(unitOrId) {
@@ -1452,14 +1971,13 @@ export class StageUnitManager {
     actor.unit.alive = false;
     actor.unit.isDead = true;
 
-    // 1. Hide idle weapon and carried weapon
     if (actor.idleWeaponMesh) {
       actor.idleWeaponMesh.visible = false;
     }
     if (actor.carriedMesh) {
       actor.sprite.release();
       if (actor.carriedMesh.material) {
-        actor.carriedMesh.material.onBeforeRender = null;
+        attackerActor.carriedMesh.material.onBeforeRender = null;
         actor.carriedMesh.material.dispose();
       }
       this.scene.remove(actor.carriedMesh);
@@ -1471,24 +1989,24 @@ export class StageUnitManager {
     if (actor.hitboxMesh) {
       actor.hitboxMesh.visible = false;
     }
+    if (actor.physicsHullMesh) {
+      actor.physicsHullMesh.visible = false;
+    }
 
-    // 2. Play death sequence
     const getNow = () => performance.now() / 1000;
     actor.sprite.play('Dead', getNow());
 
     await this._sleep(500);
 
-    // 3. Hide ground team indicator ring / plinth
     if (actor.ring) {
       actor.ring.visible = false;
     }
 
-    // 4. Reduce corpse opacity to 0.28 so living units never collide visually
     this.setActorOpacity(actor, 0.28);
   }
 
   /**
-   * Spawns a 3D golden-tied Loot Pouch mesh on tile (x, z) that gently bobs and sparkles on the surface.
+   * Spawns a 3D golden-tied Loot Pouch mesh on tile (x, z).
    * @param {number} x
    * @param {number} z
    * @param {IsometricBoard} board
@@ -1508,11 +2026,10 @@ export class StageUnitManager {
     const group = new THREE.Group();
     group.name = `LootBag_${key}`;
 
-    // 1. Rich velvet bag body
     const sackGeo = new THREE.SphereGeometry(2.4, 16, 16);
     sackGeo.scale(1.0, 1.25, 1.0);
     const sackMat = new THREE.MeshStandardMaterial({
-      color: 0x991b1b, // rich blood-crimson velvet
+      color: 0x991b1b,
       roughness: 0.65,
       metalness: 0.15,
       envMap: this.envMap
@@ -1521,7 +2038,6 @@ export class StageUnitManager {
     sack.position.y = 2.4;
     group.add(sack);
 
-    // 2. Gleaming golden cord / ribbon tie ring
     const tieGeo = new THREE.TorusGeometry(1.4, 0.35, 8, 16);
     tieGeo.rotateX(Math.PI / 2);
     const tieMat = new THREE.MeshStandardMaterial({
@@ -1536,14 +2052,12 @@ export class StageUnitManager {
     tie.position.y = 4.2;
     group.add(tie);
 
-    // 3. Top sack ruffle
     const ruffleGeo = new THREE.ConeGeometry(1.6, 1.4, 8, 1, true);
     ruffleGeo.rotateX(Math.PI);
     const ruffle = new THREE.Mesh(ruffleGeo, sackMat);
     ruffle.position.y = 5.0;
     group.add(ruffle);
 
-    // 4. Sparkling golden gem sigil
     const sparkleGeo = new THREE.OctahedronGeometry(0.85, 0);
     const sparkleMat = new THREE.MeshBasicMaterial({
       color: 0xfef08a,
@@ -1569,9 +2083,7 @@ export class StageUnitManager {
   }
 
   /**
-   * Unit picks up a dropped loot pouch at (x, z):
-   * plays 'Found Item' or 'Chest Pickup' for 380ms, removes and disposes the pouch mesh,
-   * and returns lootData.
+   * Unit picks up a dropped loot pouch at (x, z).
    * @param {number} x
    * @param {number} z
    * @param {string|number|Object} unitOrId
@@ -1617,12 +2129,7 @@ export class StageUnitManager {
   }
 
   /**
-   * Applies tactical RPG status to a unit:
-   * 'frozen' -> plays 'Frozen' + icy blue tint ring
-   * 'sleeping' -> plays 'Sleeping'
-   * 'confused' -> plays 'Confused'
-   * 'floating' -> plays 'Float' (actor.sprite.player.water = false, elevated +5 units)
-   * null -> restores 'Idle' animation (and proper water status/stance)
+   * Applies tactical RPG status to a unit.
    * @param {string|number|Object} unitOrId
    * @param {string|null} status
    */
@@ -1634,7 +2141,6 @@ export class StageUnitManager {
     const getNow = () => (typeof performance !== 'undefined' ? performance.now() / 1000 : 0);
     const stat = status ? String(status).toLowerCase() : null;
 
-    // Clean up previous status ring if any
     if (actor.statusRingMesh) {
       this.scene.remove(actor.statusRingMesh);
       if (actor.statusRingMesh.geometry) actor.statusRingMesh.geometry.dispose();
@@ -1644,7 +2150,6 @@ export class StageUnitManager {
 
     if (stat === 'frozen') {
       actor.sprite.play('Frozen', getNow());
-      // Icy blue tint ring around unit feet
       const iceGeo = new THREE.RingGeometry(6.2, 9.8, 16);
       const iceMat = new THREE.MeshBasicMaterial({
         color: 0x38bdf8,
@@ -1665,10 +2170,8 @@ export class StageUnitManager {
     } else if (stat === 'floating') {
       actor.sprite.play('Float', getNow());
       actor.sprite.player.water = false;
-      // Elevate unit +5 units in the air
       actor.sprite.group.position.y = actor.groundY + actor.sprite.standHeight + 5;
     } else {
-      // null / cleared: restore Idle animation and proper water stance
       if (actor.inWater) {
         actor.sprite.player.water = true;
         actor.sprite.group.position.y = actor.groundY + actor.sprite.standHeight - 3.5;
@@ -1774,7 +2277,6 @@ export class StageUnitManager {
     const group = new THREE.Group();
     group.position.copy(position);
 
-    // Expanding shockwave ring
     const ringGeo = new THREE.RingGeometry(0.5, 2.5, 24);
     const ringMat = new THREE.MeshBasicMaterial({
       color: burstColor,
@@ -1787,7 +2289,6 @@ export class StageUnitManager {
     ringMesh.rotation.x = -Math.PI / 2;
     group.add(ringMesh);
 
-    // Radiant spark lines
     const sparkGeo = new THREE.BufferGeometry();
     const sparkPoints = [];
     for (let i = 0; i < 8; i++) {
@@ -1817,7 +2318,7 @@ export class StageUnitManager {
 
   /**
    * Per-frame update for all unit sprites, active projectiles, hit bursts, team rings,
-   * idle weapons, and boss crowns.
+   * idle weapons, boss crowns, damage counters, and physics hull meshes.
    * @param {number} nowSec
    * @param {number} dt
    * @param {THREE.Camera|TacticalCamera} camera
@@ -1885,7 +2386,6 @@ export class StageUnitManager {
 
           const bob = Math.sin(nowSec * 3.0 + (actor.unit.unitIndex || 0)) * 0.7;
 
-          // Across vector (-fZ, 0, fX)
           const acrossX = -fZ;
           const acrossZ = fX;
           const side = 4.8 * aScale;
@@ -1899,6 +2399,20 @@ export class StageUnitManager {
 
           const angle = Math.atan2(fX, fZ);
           actor.idleWeaponMesh.rotation.set(0.18, angle + 0.25, -0.15);
+        }
+      }
+
+      // Update 3D volumetric physics hull mesh position & waterline
+      if (this.physicsDebugEnabled && actor.physicsHullMesh && actor.physicsHullMesh.visible && actor.sprite?.group) {
+        if (actor.unit.isDead) {
+          actor.physicsHullMesh.visible = false;
+        } else {
+          const pos = actor.sprite.group.position;
+          actor.physicsHullMesh.position.set(pos.x, pos.y, pos.z);
+          actor.physicsHullMesh.quaternion.copy(actor.sprite.group.quaternion);
+          if (actor.physicsHullMesh.material && actor.physicsHullMesh.material.uniforms) {
+            actor.physicsHullMesh.material.uniforms.waterline.value = actor.inWater ? 3.5 : -1000.0;
+          }
         }
       }
     }
@@ -1924,7 +2438,26 @@ export class StageUnitManager {
       }
     }
 
-    // 3. Animate 3D dropped loot bags (bobbing & sparkles)
+    // 3. Animate 3D WebGL Pixel-Art Hopping Damage Counters
+    if (this.damageCounters && this.damageCounters.length > 0) {
+      for (let i = this.damageCounters.length - 1; i >= 0; i--) {
+        const dc = this.damageCounters[i];
+        const ticks = (nowSec - dc.startTime) * 60;
+        if (ticks >= COUNTER_TICKS) {
+          this.scene.remove(dc.mesh);
+          dc.geometry.dispose();
+          dc.material.dispose();
+          this.damageCounters.splice(i, 1);
+        } else {
+          for (let d = 0; d < dc.digitsCount; d++) {
+            dc.hops[d] = counterHop(ticks, d);
+          }
+          dc.material.uniforms.hops.value = dc.hops;
+        }
+      }
+    }
+
+    // 4. Animate 3D dropped loot bags (bobbing & sparkles)
     if (this.lootBags) {
       for (const loot of this.lootBags.values()) {
         if (loot.mesh) {
@@ -2070,6 +2603,12 @@ export class StageUnitManager {
         if (actor.statusRingMesh.material) actor.statusRingMesh.material.dispose();
         this.scene.remove(actor.statusRingMesh);
       }
+      if (actor.physicsHullMesh) {
+        if (actor.physicsHullMesh.geometry) actor.physicsHullMesh.geometry.dispose();
+        if (actor.physicsHullMesh.material) actor.physicsHullMesh.material.dispose();
+        this.scene.remove(actor.physicsHullMesh);
+        actor.physicsHullMesh = null;
+      }
       if (actor.sprite?.dispose) actor.sprite.dispose();
     }
     this.units.clear();
@@ -2085,6 +2624,31 @@ export class StageUnitManager {
         }
       }
       this.lootBags.clear();
+    }
+
+    if (this.damageCounters) {
+      for (const dc of this.damageCounters) {
+        this.scene.remove(dc.mesh);
+        dc.geometry?.dispose();
+        dc.material?.dispose();
+      }
+      this.damageCounters = [];
+    }
+
+    if (this._dmgDigitsTex) {
+      this._dmgDigitsTex.dispose();
+      this._dmgDigitsTex = null;
+    }
+    if (this._healDigitsTex) {
+      this._healDigitsTex.dispose();
+      this._healDigitsTex = null;
+    }
+
+    if (this.bodyResources) {
+      try {
+        this.bodyResources.dispose();
+      } catch {}
+      this.bodyResources = null;
     }
 
     if (this.itemFinishBake) {
